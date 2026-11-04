@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"sync"
 	"testing"
@@ -128,6 +129,7 @@ func start(t *testing.T, opts ...func(*options)) *world {
 		QueueBlock:              10 * time.Millisecond,
 		RateLimitPerSecond:      o.ratePerSecond,
 		RateLimitBurst:          o.rateBurst,
+		InternalNets:            []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8"), netip.MustParsePrefix("::1/128")},
 	})
 	if err != nil {
 		t.Fatalf("bootstrap.New: %v", err)
@@ -499,5 +501,61 @@ func TestAppServesThePanelTheDocsAndTheSpec(t *testing.T) {
 		if resp.StatusCode != http.StatusOK || !strings.Contains(string(raw), want) {
 			t.Errorf("%s: status %d, missing %q", path, resp.StatusCode, want)
 		}
+	}
+}
+
+func (w *world) invoiceFrom(remote, xff, mid string, body map[string]any) int {
+	w.t.Helper()
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest("POST", "/demo/mkt/pvt/orders/"+mid+"/invoice", bytes.NewReader(raw))
+	req.RemoteAddr = remote
+	if xff != "" {
+		req.Header.Set("X-Forwarded-For", xff)
+	}
+	rec := httptest.NewRecorder()
+	w.handler.ServeHTTP(rec, req)
+	return rec.Code
+}
+
+func TestInvoiceEndpointAcceptsOnlyTheInternalNetwork(t *testing.T) {
+	w := start(t)
+	w.place("NET-1")
+	body := map[string]any{"type": "Output", "invoiceNumber": "INV-N", "trackingNumber": "T-1"}
+
+	if code := w.invoiceFrom("203.0.113.7:1", "", "NET-1", body); code != http.StatusForbidden {
+		t.Errorf("public peer: status = %d, want 403", code)
+	}
+	if code := w.invoiceFrom("127.0.0.1:1", "198.51.100.1", "NET-1", body); code != http.StatusForbidden {
+		t.Errorf("request through the proxy: status = %d, want 403", code)
+	}
+	if code := w.invoiceFrom("127.0.0.1:1", "", "NET-1", body); code != http.StatusOK {
+		t.Errorf("internal peer: status = %d, want 200", code)
+	}
+}
+
+func TestInvoiceFieldsAndCountPerOrderAreBounded(t *testing.T) {
+	w := start(t)
+	w.place("LIM-1")
+	call := func(invoice, tracking string) int {
+		return w.invoiceFrom("127.0.0.1:1", "", "LIM-1", map[string]any{"type": "Output", "invoiceNumber": invoice, "trackingNumber": tracking})
+	}
+
+	for name, args := range map[string][2]string{
+		"invoice with slash": {"a/b", "T"},
+		"invoice too long":   {strings.Repeat("a", 65), "T"},
+		"tracking with html": {"INV-OK", "<b>"},
+		"tracking too long":  {"INV-OK", strings.Repeat("9", 65)},
+	} {
+		if code := call(args[0], args[1]); code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400", name, code)
+		}
+	}
+	for i := 0; i < 5; i++ {
+		if code := call("INV-"+strings.Repeat("x", i+1), "T"); code != http.StatusOK {
+			t.Fatalf("invoice %d: status = %d, want 200", i+1, code)
+		}
+	}
+	if code := call("INV-one-too-many", "T"); code != http.StatusTooManyRequests {
+		t.Errorf("sixth distinct invoice: status = %d, want 429", code)
 	}
 }
