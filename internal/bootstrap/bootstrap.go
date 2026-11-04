@@ -51,6 +51,9 @@ type Config struct {
 	RateLimitPerSecond float64
 	RateLimitBurst     int
 	TrustedProxies     []netip.Prefix
+	// InternalNets are the networks whose direct (non-proxied) requests may
+	// reach the simulator's invoice endpoint without the rate limit.
+	InternalNets []netip.Prefix
 }
 
 type App struct {
@@ -137,8 +140,9 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 				return sendJSON(ctx, httpClient, http.MethodPost, cfg.TMSURL+"/admin/reset", nil)
 			},
 		},
-		NewID: newID,
-		Now:   time.Now,
+		InternalOnly: func(r *http.Request) bool { return ratelimit.IsInternal(r, cfg.InternalNets) },
+		NewID:        newID,
+		Now:          time.Now,
 	})
 
 	metrics := observability.NewMetrics()
@@ -175,7 +179,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 
 	limiter := ratelimit.New(cfg.RateLimitPerSecond, cfg.RateLimitBurst, time.Now)
 	var handler http.Handler = root
-	handler = ratelimit.Middleware(limiter, cfg.TrustedProxies, ratelimit.Path("/healthz"))(handler)
+	handler = ratelimit.Middleware(limiter, cfg.TrustedProxies, ratelimit.Path("/healthz"), ratelimit.InternalPrefix("/demo/mkt/", cfg.InternalNets))(handler)
 	handler = metrics.Middleware(handler)
 	handler = observability.RequestLog(slog.Default(), func(r *http.Request) string { return ratelimit.ClientIP(r, cfg.TrustedProxies) })(handler)
 	handler = securityHeaders(handler)

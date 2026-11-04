@@ -34,8 +34,8 @@ func (h *handler) placeOrder(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	if req.MarketplaceOrderID == "" {
-		writeError(w, http.StatusBadRequest, "invalid_request", "marketplaceOrderId is required")
+	if !idPattern.MatchString(req.MarketplaceOrderID) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "marketplaceOrderId must be 1 to 40 letters, digits or hyphens")
 		return
 	}
 	if len(req.Items) > maxItems {
@@ -48,6 +48,10 @@ func (h *handler) placeOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	items := make([]domain.Item, len(req.Items))
 	for i, it := range req.Items {
+		if !skuPattern.MatchString(it.ID) {
+			writeError(w, http.StatusBadRequest, "invalid_request", fmt.Sprintf("item %d needs a valid id", i))
+			return
+		}
 		items[i] = domain.Item{SKU: it.ID, Quantity: it.Quantity, PriceCents: it.Price}
 	}
 
@@ -61,9 +65,18 @@ func (h *handler) placeOrder(w http.ResponseWriter, r *http.Request) {
 		writeDomainError(w, err)
 		return
 	}
+	// Built from the stored order: a repeated placement may carry a different
+	// body, and the answer must describe the order that actually exists.
+	placed := make([]placedItem, len(order.Items))
+	for i, it := range order.Items {
+		placed[i] = placedItem{ID: it.SKU, Quantity: it.Quantity, Price: it.PriceCents}
+		if i < len(req.Items) && req.Items[i].ID == it.SKU {
+			placed[i].Seller = req.Items[i].Seller
+		}
+	}
 	writeJSON(w, http.StatusOK, placementResponse{
 		MarketplaceOrderID: req.MarketplaceOrderID,
 		OrderID:            order.ID,
-		Items:              req.Items,
+		Items:              placed,
 	})
 }

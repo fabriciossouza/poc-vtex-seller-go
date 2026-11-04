@@ -29,8 +29,8 @@ func (h *handler) fulfill(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	if req.MarketplaceOrderID == "" {
-		writeError(w, http.StatusBadRequest, "invalid_request", "marketplaceOrderId is required")
+	if !idPattern.MatchString(req.MarketplaceOrderID) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "marketplaceOrderId must be 1 to 40 letters, digits or hyphens")
 		return
 	}
 	h.act(w, r, h.Fulfill, req.MarketplaceOrderID)
@@ -41,7 +41,7 @@ func (h *handler) cancel(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	if req.MarketplaceOrderID == "" || req.MarketplaceOrderGroup == "" || req.CancellationRequestID == "" ||
+	if !idPattern.MatchString(req.MarketplaceOrderID) || req.MarketplaceOrderGroup == "" || req.CancellationRequestID == "" ||
 		req.CancellationRequestDate == "" || req.Reason == "" || req.RequestedByUser == nil {
 		writeError(w, http.StatusBadRequest, "invalid_request",
 			"marketplaceOrderId, marketplaceOrderGroup, cancellationRequestId, cancellationRequestDate, reason and requestedByUser are required")

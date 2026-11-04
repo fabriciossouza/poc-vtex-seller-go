@@ -24,11 +24,14 @@ const (
 	maxQuantity     = 10
 	maxStateOrders  = 12
 	maxDemoBodySize = 4 << 10
+	maxInvoices     = 5
 )
 
 var (
 	idPattern  = regexp.MustCompile(`^[A-Za-z0-9-]{1,40}$`)
 	skuPattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,20}$`)
+	// refPattern bounds the invoice and tracking numbers the simulator stores.
+	refPattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
 )
 
 type StockLine struct {
@@ -58,8 +61,11 @@ type Deps struct {
 	SetERPFailing      func(ctx context.Context, failing bool) error
 	// Resets clear the state that lives outside the controller.
 	Resets []func(ctx context.Context) error
-	NewID  func() string
-	Now    func() time.Time
+	// InternalOnly decides whether a request came from the internal network;
+	// the invoice endpoint refuses everyone else. A nil value refuses all.
+	InternalOnly func(*http.Request) bool
+	NewID        func() string
+	Now          func() time.Time
 }
 
 // Controller plays the marketplace: it sends simulation, placement and
@@ -225,6 +231,10 @@ func (c *Controller) fulfill(w http.ResponseWriter, r *http.Request) {
 // receiveInvoice plays the marketplace endpoint that the seller calls. A
 // repeated invoice number is answered with 409, as the real one does.
 func (c *Controller) receiveInvoice(w http.ResponseWriter, r *http.Request) {
+	if c.InternalOnly == nil || !c.InternalOnly(r) {
+		writeError(w, http.StatusForbidden, "forbidden", "the invoice endpoint only accepts calls from the internal network")
+		return
+	}
 	mid := r.PathValue("marketplaceOrderId")
 	if len(c.Timeline.Events(mid)) == 0 {
 		writeError(w, http.StatusNotFound, "order_not_found", "unknown marketplace order")
@@ -237,12 +247,17 @@ func (c *Controller) receiveInvoice(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &inv) {
 		return
 	}
-	if inv.InvoiceNumber == "" {
-		writeError(w, http.StatusBadRequest, "invalid_request", "invoiceNumber is required")
+	if !refPattern.MatchString(inv.InvoiceNumber) || (inv.TrackingNumber != "" && !refPattern.MatchString(inv.TrackingNumber)) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "invoiceNumber and trackingNumber must be 1 to 64 letters, digits or hyphens")
 		return
 	}
 	c.mu.Lock()
 	seen := c.invoices[mid][inv.InvoiceNumber]
+	if !seen && len(c.invoices[mid]) >= maxInvoices {
+		c.mu.Unlock()
+		writeError(w, http.StatusTooManyRequests, "invoice_limit", "too many distinct invoices for this order")
+		return
+	}
 	if c.invoices[mid] == nil {
 		c.invoices[mid] = map[string]bool{}
 	}

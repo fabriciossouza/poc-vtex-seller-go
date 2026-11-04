@@ -5,6 +5,7 @@ package httpadapter
 import (
 	"context"
 	"net/http"
+	"regexp"
 
 	"github.com/fabriciossouza/poc-vtex-seller-go/internal/app"
 	"github.com/fabriciossouza/poc-vtex-seller-go/internal/domain"
@@ -45,6 +46,13 @@ func NewHandler(d Deps) http.Handler {
 	mux.HandleFunc("POST /pvt/orders/{sellerOrderId}/cancel", h.cancel)
 	return mux
 }
+
+var (
+	// idPattern bounds ids that come from the caller: they end up in logs,
+	// timeline entries and URLs, so dots and slashes are refused.
+	idPattern  = regexp.MustCompile(`^[A-Za-z0-9-]{1,40}$`)
+	skuPattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,20}$`)
+)
 
 // maxItems bounds the work one request can ask for.
 const maxItems = 50

@@ -115,6 +115,11 @@ func loadSettings(getenv func(string) string) (settings, error) {
 		r.fail("TRUSTED_PROXIES", err)
 	}
 	c.TrustedProxies = proxies
+	internal, err := ratelimit.ParseCIDRs(r.str("INTERNAL_NETS", "127.0.0.0/8,::1/128"))
+	if err != nil {
+		r.fail("INTERNAL_NETS", err)
+	}
+	c.InternalNets = internal
 
 	if r.err != nil {
 		return settings{}, r.err

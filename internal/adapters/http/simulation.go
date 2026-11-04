@@ -64,8 +64,8 @@ func (h *handler) simulate(w http.ResponseWriter, r *http.Request) {
 	}
 	items := make([]domain.Item, len(req.Items))
 	for i, it := range req.Items {
-		if it.ID == "" || it.Quantity <= 0 {
-			writeError(w, http.StatusBadRequest, "invalid_request", fmt.Sprintf("item %d needs an id and a positive quantity", i))
+		if !skuPattern.MatchString(it.ID) || it.Quantity <= 0 {
+			writeError(w, http.StatusBadRequest, "invalid_request", fmt.Sprintf("item %d needs a valid id and a positive quantity", i))
 			return
 		}
 		items[i] = domain.Item{SKU: it.ID, Quantity: it.Quantity}
