@@ -174,3 +174,29 @@ func TestMalformedMessageGoesStraightToTheDLQInsteadOfBlockingTheQueue(t *testin
 		t.Fatalf("dead letters = %+v", letters)
 	}
 }
+
+func TestRestartedConsumerReceivesItsOwnPendingMessagesFirst(t *testing.T) {
+	ctx := context.Background()
+	client, _ := newClient(t)
+	before := newBus(t, client, "w1")
+	_ = before.Publish(ctx, authorized)
+	first, _ := before.Receive(ctx) // interrupted by a shutdown: neither acked nor rejected
+
+	after := newBus(t, client, "w1")
+	again, err := after.Receive(ctx)
+
+	if err != nil || again.ID != first.ID {
+		t.Fatalf("after restart: delivery = %+v, err = %v; want %+v", again, err, first)
+	}
+	if _, err := after.Receive(ctx); !errors.Is(err, ports.ErrNoDelivery) {
+		t.Fatalf("second receive err = %v, want ErrNoDelivery", err)
+	}
+}
+
+func TestNewRequiresAPositiveClaimIdleSoAbandonedMessagesAreNeverStuck(t *testing.T) {
+	client, _ := newClient(t)
+	_, err := queue.New(context.Background(), client, queue.Config{Stream: "orders", Group: "workers", DLQ: "dlq", Consumer: "w1"})
+	if err == nil {
+		t.Fatal("ClaimIdle = 0 must be rejected")
+	}
+}
