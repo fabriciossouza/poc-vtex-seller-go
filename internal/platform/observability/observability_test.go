@@ -90,3 +90,23 @@ func TestRequestLogWritesOneStructuredJSONLinePerRequest(t *testing.T) {
 		t.Fatal("the query string must not be logged")
 	}
 }
+
+func TestMetricsFoldNonStandardMethodsIntoOTHER(t *testing.T) {
+	m := observability.NewMetrics()
+	h := m.Middleware(routed())
+
+	for _, method := range []string{"X-ATTACK-1", "X-ATTACK-2", "PROPFIND", "get"} {
+		req := httptest.NewRequest(http.MethodGet, "/orders/1", nil)
+		req.Method = method
+		h.ServeHTTP(httptest.NewRecorder(), req)
+	}
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/boom", nil))
+	out := scrape(t, m)
+
+	if strings.Contains(out, "ATTACK") || strings.Contains(out, "PROPFIND") || strings.Contains(out, `method="get"`) {
+		t.Errorf("arbitrary methods became label values\n%s", out)
+	}
+	if !strings.Contains(out, `method="OTHER"`) || !strings.Contains(out, `method="GET"`) {
+		t.Errorf("want OTHER and GET labels\n%s", out)
+	}
+}
