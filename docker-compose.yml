@@ -1,0 +1,79 @@
+name: poc-vtex
+
+services:
+  seller:
+    build:
+      context: .
+      target: seller
+    environment:
+      REDIS_ADDR: redis:6379
+      DB_PATH: /data/seller.db
+      ERP_URL: http://erp:8080
+      TMS_URL: http://tms:8080
+      MARKETPLACE_ALLOWED_HOSTS: seller:8080
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+      RATE_LIMIT_RPS: ${RATE_LIMIT_RPS:-10}
+      RATE_LIMIT_BURST: ${RATE_LIMIT_BURST:-30}
+    ports:
+      - "127.0.0.1:${PORT:-8094}:8080"
+    tmpfs:
+      - /data:mode=0700,uid=65532,gid=65532
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "/seller", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    depends_on:
+      redis: { condition: service_healthy }
+      erp: { condition: service_healthy }
+      tms: { condition: service_started }
+    restart: unless-stopped
+
+  erp:
+    image: php:8.3-cli-alpine
+    working_dir: /app
+    command: ["php", "-S", "0.0.0.0:8080", "index.php"]
+    environment:
+      STATE_FILE: /tmp/erp-state.json
+    volumes:
+      - ./mocks/sap-adapter-php:/app:ro
+    user: "65534:65534"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  tms:
+    build:
+      context: .
+      target: tms-mock
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "64mb", "--maxmemory-policy", "noeviction"]
+    user: "999:999"
+    read_only: true
+    tmpfs:
+      - /data:uid=999,gid=999
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
