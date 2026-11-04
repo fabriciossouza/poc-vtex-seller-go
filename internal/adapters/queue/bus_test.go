@@ -260,3 +260,27 @@ func TestResetEmptiesStreamAndDLQAndTheBusKeepsWorking(t *testing.T) {
 		t.Fatalf("Receive after republish = %+v, %v", got, err)
 	}
 }
+
+func TestRecentDeadLettersReturnsTheNewestFirstWithTheTotalAndDLQDepthIsXLEN(t *testing.T) {
+	ctx := context.Background()
+	client, _ := newClient(t)
+	bus := newBus(t, client, "w1")
+	for i := 0; i < 5; i++ {
+		d := ports.Delivery{ID: "0-" + string(rune('1'+i)), Event: domain.Event{Type: domain.EventOrderAuthorized, OrderID: "ord-" + string(rune('a'+i))}}
+		if err := bus.Reject(ctx, d, "x", 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	letters, total, err := bus.RecentDeadLetters(ctx, 2)
+
+	if err != nil || total != 5 || len(letters) != 2 {
+		t.Fatalf("letters = %d, total = %d, err = %v", len(letters), total, err)
+	}
+	if letters[0].Event.OrderID != "ord-e" || letters[1].Event.OrderID != "ord-d" {
+		t.Fatalf("order = %q, %q; want newest first", letters[0].Event.OrderID, letters[1].Event.OrderID)
+	}
+	if depth, err := bus.DLQDepth(ctx); err != nil || depth != 5 {
+		t.Fatalf("depth = %d, err = %v", depth, err)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -23,10 +24,11 @@ import (
 // erpStub behaves like the PHP mock: idempotent by Idempotency-Key, with a
 // switch that makes it answer 503.
 type erpStub struct {
-	mu      sync.Mutex
-	failing bool
-	orders  map[string]bool
-	resets  int
+	mu         sync.Mutex
+	resetFails bool
+	failing    bool
+	orders     map[string]bool
+	resets     int
 }
 
 func (e *erpStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -48,6 +50,10 @@ func (e *erpStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&cfg)
 		e.failing = cfg.ErrorRate >= 1
 	case "/admin/reset":
+		if e.resetFails {
+			http.Error(w, "reset broken", http.StatusInternalServerError)
+			return
+		}
 		e.resets++
 		e.failing = false
 		e.orders = map[string]bool{}
@@ -63,8 +69,9 @@ func (e *erpStub) registered() int {
 }
 
 type tmsStub struct {
-	mu     sync.Mutex
-	resets int
+	mu         sync.Mutex
+	resets     int
+	quotesFail bool
 }
 
 func (s *tmsStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -73,6 +80,10 @@ func (s *tmsStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	switch r.URL.Path {
 	case "/quotes":
+		if s.quotesFail {
+			http.Error(w, "down", http.StatusServiceUnavailable)
+			return
+		}
 		_, _ = w.Write([]byte(`{"priceCents":1099,"estimateHours":168}`))
 	case "/shipments":
 		_, _ = w.Write([]byte(`{"trackingCode":"TRK-TEST1"}`))
@@ -85,6 +96,7 @@ func (s *tmsStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 type world struct {
 	t       *testing.T
+	rdb     *redis.Client
 	url     string
 	erp     *erpStub
 	tms     *tmsStub
@@ -142,7 +154,7 @@ func start(t *testing.T, opts ...func(*options)) *world {
 	done := make(chan struct{})
 	go func() { _ = app.Worker.Run(ctx); close(done) }()
 	t.Cleanup(func() { cancel(); <-done; app.Close() })
-	return &world{t: t, url: srv.URL, erp: erp, tms: tms, app: app, handler: app.Handler}
+	return &world{t: t, rdb: rdb, url: srv.URL, erp: erp, tms: tms, app: app, handler: app.Handler}
 }
 
 func (w *world) do(method, path string, body any) (int, map[string]any) {
@@ -557,5 +569,139 @@ func TestInvoiceFieldsAndCountPerOrderAreBounded(t *testing.T) {
 	}
 	if code := call("INV-one-too-many", "T"); code != http.StatusTooManyRequests {
 		t.Errorf("sixth distinct invoice: status = %d, want 429", code)
+	}
+}
+
+func (w *world) addLetters(n int, orderPrefix string) {
+	w.t.Helper()
+	for i := 0; i < n; i++ {
+		err := w.rdb.XAdd(context.Background(), &redis.XAddArgs{Stream: "orders.dlq", Values: map[string]any{
+			"type": "order.authorized", "order_id": fmt.Sprintf("%s-%02d", orderPrefix, i), "reason": "x",
+			"attempts": 4, "failed_at": time.Now().UTC().Format(time.RFC3339Nano), "source_id": "0-1",
+		}}).Err()
+		if err != nil {
+			w.t.Fatal(err)
+		}
+	}
+}
+
+func TestStateShowsTheTwentyNewestLettersWithTheTotalAndMetricsUseXLEN(t *testing.T) {
+	w := start(t)
+	w.addLetters(25, "ghost")
+
+	st := w.state()
+
+	letters := st["dlq"].([]any)
+	if len(letters) != 20 || st["dlqTotal"] != float64(25) {
+		t.Fatalf("letters = %d, dlqTotal = %v; want 20 and 25", len(letters), st["dlqTotal"])
+	}
+	if first := letters[0].(map[string]any)["orderId"]; first != "ghost-24" {
+		t.Fatalf("first letter = %v, want the newest (ghost-24)", first)
+	}
+	rec := httptest.NewRecorder()
+	w.handler.ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
+	if !strings.Contains(rec.Body.String(), "dlq_depth 25") {
+		t.Fatalf("metrics lack dlq_depth 25:\n%s", rec.Body.String())
+	}
+}
+
+func TestReplayHandlesAtMostOneBatchPerCall(t *testing.T) {
+	w := start(t)
+	w.addLetters(25, "ghost")
+
+	status, res := w.do("POST", "/demo/dlq/replay", nil)
+
+	if status != http.StatusOK || res["discarded"] != float64(20) {
+		t.Fatalf("status = %d, res = %v; want 20 discarded in this call", status, res)
+	}
+	if total := w.state()["dlqTotal"]; total != float64(5) {
+		t.Fatalf("dlqTotal = %v, want 5 left for the next call", total)
+	}
+}
+
+func (w *world) sellerPost(path string, body any) (int, map[string]any) {
+	w.t.Helper()
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest("POST", path, bytes.NewReader(raw))
+	req.RemoteAddr = "127.0.0.1:9"
+	rec := httptest.NewRecorder()
+	w.handler.ServeHTTP(rec, req)
+	var out map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &out)
+	return rec.Code, out
+}
+
+func TestDirectPlacementIsLinkedToItsMarketplaceOrderInTheTimeline(t *testing.T) {
+	w := start(t)
+	status, placed := w.sellerPost("/pvt/orders", map[string]any{
+		"marketplaceOrderId":          "DIRECT-1",
+		"marketplaceServicesEndpoint": w.url + "/demo/mkt",
+		"items":                       []any{map[string]any{"id": "6", "quantity": 1, "seller": "1", "price": 2499}},
+	})
+	if status != http.StatusOK {
+		t.Fatalf("placement: %d %v", status, placed)
+	}
+	sellerID := placed["orderId"].(string)
+	if status, got := w.sellerPost("/pvt/orders/"+sellerID+"/fulfill", map[string]any{"marketplaceOrderId": "DIRECT-1"}); status != http.StatusOK {
+		t.Fatalf("fulfill: %d %v", status, got)
+	}
+
+	w.eventually("the order to ship", func() bool {
+		o := w.orderState("DIRECT-1")
+		return o != nil && o["status"] == "shipped" && strings.Contains(sources(o), "despacho concluído")
+	})
+
+	orders := w.state()["orders"].([]any)
+	if len(orders) != 1 {
+		t.Fatalf("panel orders = %d, want 1 (no duplicate entry under the seller id): %v", len(orders), orders)
+	}
+	if o := orders[0].(map[string]any); o["status"] == "not_created" {
+		t.Fatalf("entry is not_created: %v", o)
+	}
+}
+
+func TestAFailedSimulationLeavesNoOrderEntryInThePanel(t *testing.T) {
+	w := start(t)
+	w.tms.mu.Lock()
+	w.tms.quotesFail = true
+	w.tms.mu.Unlock()
+
+	if status, _ := w.do("POST", "/demo/orders", map[string]any{"marketplaceOrderId": "SIM-FAIL", "sku": "6", "quantity": 1}); status == http.StatusOK {
+		t.Fatal("placement should have failed with the quote down")
+	}
+
+	if orders := w.state()["orders"].([]any); len(orders) != 0 {
+		t.Fatalf("panel orders = %v, want none", orders)
+	}
+}
+
+func TestResetKeepsTheERPFlagWhenResettingTheMockFails(t *testing.T) {
+	w := start(t)
+	w.do("POST", "/demo/erp", map[string]any{"failing": true})
+	w.erp.mu.Lock()
+	w.erp.resetFails = true
+	w.erp.mu.Unlock()
+
+	if status, _ := w.do("POST", "/demo/reset", nil); status != http.StatusInternalServerError {
+		t.Fatalf("reset status = %d, want 500", status)
+	}
+
+	if failing := w.state()["erp"].(map[string]any)["failing"]; failing != true {
+		t.Fatalf("erp.failing = %v: the mock is still down, the panel must say so", failing)
+	}
+}
+
+func TestInternalInvoiceCallbackIsNotRateLimited(t *testing.T) {
+	w := start(t, func(o *options) { o.rateBurst, o.ratePerSecond = 3, 0.001 })
+	w.place("RL-1")
+	for i := 0; i < 5; i++ {
+		w.do("GET", "/demo/state", nil)
+	}
+	if status, _ := w.do("GET", "/demo/state", nil); status != http.StatusTooManyRequests {
+		t.Fatalf("setup: the public budget should be spent, got %d", status)
+	}
+
+	if code := w.invoiceFrom("127.0.0.1:1", "", "RL-1", map[string]any{"type": "Output", "invoiceNumber": "INV-RL", "trackingNumber": "T"}); code != http.StatusOK {
+		t.Fatalf("internal callback: status = %d, want 200 even with the budget spent", code)
 	}
 }
