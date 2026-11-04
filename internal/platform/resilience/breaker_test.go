@@ -107,3 +107,19 @@ func TestBreakerHalfOpenProbeFailureReopensForAFullTimeout(t *testing.T) {
 		t.Fatalf("err = %v, want still open", err)
 	}
 }
+
+func TestBreakerResetClosesAnOpenCircuit(t *testing.T) {
+	b := newBreaker(&fakeClock{now: time.Unix(0, 0)})
+	for i := 0; i < 3; i++ {
+		_ = fail(b)
+	}
+
+	b.Reset()
+
+	if snap := b.Snapshot(); snap.State != resilience.StateClosed || snap.ConsecutiveFailures != 0 {
+		t.Fatalf("snapshot after Reset = %+v", snap)
+	}
+	if err := succeed(b); err != nil {
+		t.Fatalf("call after Reset: %v", err)
+	}
+}

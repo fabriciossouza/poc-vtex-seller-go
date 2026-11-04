@@ -188,3 +188,23 @@ func TestSaveBumpsTheVersionSoTheSameOrderCanBeSavedAgain(t *testing.T) {
 		t.Fatalf("got status %s version %d", got.Status, got.Version)
 	}
 }
+
+func TestResetRemovesEveryOrderAndFreesTheIdempotencyKeys(t *testing.T) {
+	ctx := context.Background()
+	repo := openRepo(t)
+	if err := repo.Save(ctx, newOrder(t, "ord-1", "mkt-1")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.Reset(ctx); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+
+	if _, err := repo.Get(ctx, "ord-1"); !errors.Is(err, domain.ErrOrderNotFound) {
+		t.Fatalf("Get after Reset = %v, want ErrOrderNotFound", err)
+	}
+	again := newOrder(t, "ord-2", "mkt-1")
+	if err := repo.Save(ctx, again); err != nil || again.ID != "ord-2" {
+		t.Fatalf("Save with the old key = %v, id %s", err, again.ID)
+	}
+}

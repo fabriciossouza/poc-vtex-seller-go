@@ -201,3 +201,62 @@ func TestNewRequiresAPositiveClaimIdleSoAbandonedMessagesAreNeverStuck(t *testin
 		t.Fatal("ClaimIdle = 0 must be rejected")
 	}
 }
+
+func TestPublishCapsTheStreamLengthAndRejectCapsTheDLQ(t *testing.T) {
+	ctx := context.Background()
+	client, _ := newClient(t)
+	bus, err := queue.New(ctx, client, queue.Config{
+		Stream: "orders", Group: "workers", DLQ: "orders-dlq", Consumer: "w1",
+		Block: 5 * time.Millisecond, ClaimIdle: time.Minute, MaxLen: 5, DLQMaxLen: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 20; i++ {
+		if err := bus.Publish(ctx, authorized); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 10; i++ {
+		d, err := bus.Receive(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := bus.Reject(ctx, d, "x", 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if n := client.XLen(ctx, "orders").Val(); n > 5 {
+		t.Fatalf("stream length = %d, want at most 5", n)
+	}
+	if n := client.XLen(ctx, "orders-dlq").Val(); n > 3 {
+		t.Fatalf("DLQ length = %d, want at most 3", n)
+	}
+}
+
+func TestResetEmptiesStreamAndDLQAndTheBusKeepsWorking(t *testing.T) {
+	ctx := context.Background()
+	client, _ := newClient(t)
+	bus := newBus(t, client, "w1")
+	_ = bus.Publish(ctx, authorized)
+	d, _ := bus.Receive(ctx)
+	_ = bus.Reject(ctx, d, "x", 1)
+	_ = bus.Publish(ctx, authorized)
+
+	if err := bus.Reset(ctx); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+
+	if letters, _ := bus.DeadLetters(ctx); len(letters) != 0 {
+		t.Fatalf("dead letters after Reset = %+v", letters)
+	}
+	if _, err := bus.Receive(ctx); !errors.Is(err, ports.ErrNoDelivery) {
+		t.Fatalf("Receive after Reset = %v, want ErrNoDelivery", err)
+	}
+	_ = bus.Publish(ctx, authorized)
+	if got, err := bus.Receive(ctx); err != nil || got.Event != authorized {
+		t.Fatalf("Receive after republish = %+v, %v", got, err)
+	}
+}
