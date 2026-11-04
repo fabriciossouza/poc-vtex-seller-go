@@ -119,8 +119,9 @@ func TestConcurrentSavesWithTheSameKeyYieldASingleOrder(t *testing.T) {
 			t.Fatalf("worker %d got order %s, want the existing %s", i, saved[i].ID, winner)
 		}
 	}
-	if n := repo.Count(ctx); n != 1 {
-		t.Fatalf("orders stored = %d, want 1", n)
+	stored, err := repo.FindByIdempotencyKey(ctx, "mkt-1")
+	if err != nil || stored.ID != winner {
+		t.Fatalf("stored = %+v, err = %v; want order %s", stored, err, winner)
 	}
 }
 

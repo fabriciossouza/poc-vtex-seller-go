@@ -32,6 +32,9 @@ type MarketplacePort interface {
 
 // OrderRepo implementations return domain.ErrOrderNotFound from Get and
 // FindByIdempotencyKey when nothing matches. Returned orders are copies.
+// When Save would insert an order whose idempotency key already belongs to
+// another order (a concurrent placement), it overwrites *order with the stored
+// one and returns nil, so the caller proceeds with the single surviving order.
 type OrderRepo interface {
 	Save(ctx context.Context, order *domain.Order) error
 	Get(ctx context.Context, id string) (*domain.Order, error)
