@@ -175,7 +175,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 
 	limiter := ratelimit.New(cfg.RateLimitPerSecond, cfg.RateLimitBurst, time.Now)
 	var handler http.Handler = root
-	handler = ratelimit.Middleware(limiter, cfg.TrustedProxies, "/healthz")(handler)
+	handler = ratelimit.Middleware(limiter, cfg.TrustedProxies, ratelimit.Path("/healthz"))(handler)
 	handler = metrics.Middleware(handler)
 	handler = observability.RequestLog(slog.Default(), func(r *http.Request) string { return ratelimit.ClientIP(r, cfg.TrustedProxies) })(handler)
 	handler = securityHeaders(handler)
