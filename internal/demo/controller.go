@@ -25,6 +25,9 @@ const (
 	maxStateOrders  = 12
 	maxDemoBodySize = 4 << 10
 	maxInvoices     = 5
+	maxStateLetters = 20
+	// replayTimeout stays well under the server's write timeout.
+	replayTimeout = 20 * time.Second
 )
 
 var (
@@ -55,12 +58,16 @@ type Deps struct {
 	Breaker  interface{ Snapshot() resilience.Snapshot }
 	// BreakerOpenTimeout lets the panel show how long until the probe.
 	BreakerOpenTimeout time.Duration
-	DeadLetters        func(ctx context.Context) ([]ports.DeadLetter, error)
-	Replay             func(ctx context.Context) (worker.ReplayResult, error)
-	Stock              func() []StockLine
-	SetERPFailing      func(ctx context.Context, failing bool) error
+	// DeadLetters returns the newest letters, up to limit, and the DLQ total.
+	DeadLetters   func(ctx context.Context, limit int) ([]ports.DeadLetter, int64, error)
+	Replay        func(ctx context.Context) (worker.ReplayResult, error)
+	Stock         func() []StockLine
+	SetERPFailing func(ctx context.Context, failing bool) error
 	// Resets clear the state that lives outside the controller.
 	Resets []func(ctx context.Context) error
+	// ResetERP clears the ERP mock; the panel's ERP flag only goes back to
+	// "up" when it succeeds. Nil means there is nothing to reset.
+	ResetERP func(ctx context.Context) error
 	// InternalOnly decides whether a request came from the internal network;
 	// the invoice endpoint refuses everyone else. A nil value refuses all.
 	InternalOnly func(*http.Request) bool
@@ -106,10 +113,17 @@ func (c *Controller) Reset(ctx context.Context) error {
 			errs = append(errs, err)
 		}
 	}
+	var erpErr error
+	if c.ResetERP != nil {
+		erpErr = c.ResetERP(ctx)
+		errs = append(errs, erpErr)
+	}
 	c.Timeline.Reset()
 	c.mu.Lock()
 	c.invoices = map[string]map[string]bool{}
-	c.erpFailing = false
+	if erpErr == nil {
+		c.erpFailing = false
+	}
 	c.mu.Unlock()
 	return errors.Join(errs...)
 }
@@ -135,7 +149,8 @@ func (c *Controller) createOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	mid, ctx := req.MarketplaceOrderID, r.Context()
 
-	price, err := c.simulate(ctx, mid, req)
+	_, duplicate := c.Timeline.SellerOrderID(mid)
+	price, simulation, err := c.simulate(ctx, req)
 	if err != nil {
 		slog.Error("demo: simulation failed", "error", err)
 		writeError(w, http.StatusBadGateway, "simulation_failed", "the seller did not answer the simulation")
@@ -151,6 +166,7 @@ func (c *Controller) createOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if status == http.StatusConflict {
+		c.Timeline.Add(mid, "marketplace", Info, simulation)
 		c.Timeline.Add(mid, "marketplace", Error, "seller recusou o pedido: sem estoque suficiente")
 		writeError(w, http.StatusConflict, "insufficient_stock", "not enough stock to place the order")
 		return
@@ -164,12 +180,11 @@ func (c *Controller) createOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, duplicate := c.Timeline.SellerOrderID(mid)
-	c.Timeline.Alias(placed.OrderID, mid)
-	if duplicate {
-		c.Timeline.Add(mid, "marketplace", Info, "pedido repetido: o seller devolveu o mesmo orderId, sem criar outro pedido")
-	} else {
-		c.Timeline.Add(mid, "marketplace", Info, fmt.Sprintf("pedido enviado ao seller (%dx SKU %s), orderId %s", req.Quantity, req.SKU, placed.OrderID))
+	// The placement recorder already linked the ids and noted the placement;
+	// the simulation came first, so it goes in front, and only now that the
+	// placement worked (a failed simulation or placement leaves no entry).
+	if !duplicate {
+		c.Timeline.Prepend(mid, "marketplace", Info, simulation)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"marketplaceOrderId": mid, "sellerOrderId": placed.OrderID, "duplicate": duplicate,
@@ -178,13 +193,13 @@ func (c *Controller) createOrder(w http.ResponseWriter, r *http.Request) {
 
 // simulate asks the seller for price and stock, as the marketplace does
 // before placing an order, and returns the unit price quoted.
-func (c *Controller) simulate(ctx context.Context, mid string, req orderRequest) (int64, error) {
+func (c *Controller) simulate(ctx context.Context, req orderRequest) (int64, string, error) {
 	status, body, err := c.callSeller(ctx, http.MethodPost, "/pvt/orderForms/simulation", map[string]any{
 		"postalCode": "01310-100", "country": "BRA",
 		"items": []map[string]any{{"id": req.SKU, "quantity": req.Quantity, "seller": "1"}},
 	})
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	var sim struct {
 		Items         []struct{ Price int64 } `json:"items"`
@@ -193,15 +208,13 @@ func (c *Controller) simulate(ctx context.Context, mid string, req orderRequest)
 		} `json:"logisticsInfo"`
 	}
 	if status != http.StatusOK || json.Unmarshal(body, &sim) != nil || len(sim.Items) == 0 || len(sim.LogisticsInfo) == 0 {
-		return 0, fmt.Errorf("simulation answered status %d", status)
+		return 0, "", fmt.Errorf("simulation answered status %d", status)
 	}
-	if len(sim.LogisticsInfo[0].SLAs) == 0 {
-		c.Timeline.Add(mid, "marketplace", Info, "simulação: sem estoque suficiente para este SKU")
-	} else {
-		c.Timeline.Add(mid, "marketplace", Info, fmt.Sprintf("simulação: preço %s, frete %s",
-			money(sim.Items[0].Price), money(sim.LogisticsInfo[0].SLAs[0].Price)))
+	message := "simulação: sem estoque suficiente para este SKU"
+	if len(sim.LogisticsInfo[0].SLAs) > 0 {
+		message = fmt.Sprintf("simulação: preço %s, frete %s", money(sim.Items[0].Price), money(sim.LogisticsInfo[0].SLAs[0].Price))
 	}
-	return sim.Items[0].Price, nil
+	return sim.Items[0].Price, message, nil
 }
 
 func (c *Controller) fulfill(w http.ResponseWriter, r *http.Request) {
@@ -309,7 +322,7 @@ func (c *Controller) state(w http.ResponseWriter, r *http.Request) {
 		}
 		orders = append(orders, v)
 	}
-	letters, err := c.DeadLetters(ctx)
+	letters, total, err := c.DeadLetters(ctx, maxStateLetters)
 	if err != nil {
 		slog.Error("demo: reading the DLQ failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "internal_error", "internal error")
@@ -328,7 +341,7 @@ func (c *Controller) state(w http.ResponseWriter, r *http.Request) {
 	failing := c.erpFailing
 	c.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"serverTime": c.Now(), "orders": orders, "dlq": dlq, "breaker": bv,
+		"serverTime": c.Now(), "orders": orders, "dlq": dlq, "dlqTotal": total, "breaker": bv,
 		"erp": map[string]bool{"failing": failing}, "stock": c.Stock(),
 	})
 }
@@ -340,6 +353,8 @@ func (c *Controller) switchERP(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &req) {
 		return
 	}
+	c.resetMu.Lock()
+	defer c.resetMu.Unlock()
 	if err := c.SetERPFailing(r.Context(), req.Failing); err != nil {
 		slog.Error("demo: switching the ERP failed", "error", err)
 		writeError(w, http.StatusBadGateway, "erp_unreachable", "could not reach the ERP mock")
@@ -352,8 +367,10 @@ func (c *Controller) switchERP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *Controller) replay(w http.ResponseWriter, r *http.Request) {
-	res, err := c.Replay(r.Context())
-	if err != nil {
+	ctx, cancel := context.WithTimeout(r.Context(), replayTimeout)
+	defer cancel()
+	res, err := c.Replay(ctx)
+	if err != nil && !errors.Is(err, context.DeadlineExceeded) {
 		slog.Error("demo: DLQ replay failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "internal_error", "internal error")
 		return

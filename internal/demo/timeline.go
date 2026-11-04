@@ -88,6 +88,26 @@ func (t *Timeline) Add(orderRef, source string, level Level, message string) {
 	t.events[id] = events
 }
 
+// Prepend records an event as the first of its order, for a step that is only
+// known to have happened once a later one succeeded.
+func (t *Timeline) Prepend(orderRef, source string, level Level, message string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	id := orderRef
+	if mkt, ok := t.toMkt[orderRef]; ok {
+		id = mkt
+	}
+	if _, known := t.events[id]; !known {
+		t.recency = append(t.recency, id)
+		t.evict()
+	}
+	events := append([]Event{{At: t.now(), Source: source, Level: level, Message: truncate(message)}}, t.events[id]...)
+	if len(events) > t.maxEvents {
+		events = events[:t.maxEvents]
+	}
+	t.events[id] = events
+}
+
 func (t *Timeline) evict() {
 	for len(t.recency) > t.maxOrders {
 		oldest := t.recency[0]

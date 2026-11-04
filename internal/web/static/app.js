@@ -135,7 +135,7 @@ function renderStatus(state) {
   erp.textContent = state.erp.failing ? "fora do ar" : "no ar";
   erp.className = state.erp.failing ? "level-error" : "level-ok";
 
-  $("dlq-count").textContent = String(state.dlq.length);
+  $("dlq-count").textContent = String(state.dlqTotal);
   $("stock-list").textContent = state.stock.map((s) => "SKU " + s.sku + ": " + s.available).join(" · ");
 }
 
@@ -167,13 +167,15 @@ function renderOrders(orders) {
   );
 }
 
-function renderDLQ(letters) {
+function renderDLQ(letters, total) {
   const box = $("dlq");
   if (letters.length === 0) {
     box.replaceChildren(el("p", "empty", "A DLQ está vazia."));
     return;
   }
+  const note = total > letters.length ? [el("p", "empty", "Mostrando as " + letters.length + " mais recentes de " + total + ".")] : [];
   box.replaceChildren(
+    ...note,
     ...letters.map((l) => {
       const card = el("div", "letter");
       card.append(
@@ -192,7 +194,7 @@ async function refresh() {
     latest = await api("GET", "/demo/state");
     renderStatus(latest);
     renderOrders(latest.orders);
-    renderDLQ(latest.dlq);
+    renderDLQ(latest.dlq, latest.dlqTotal);
   } catch (err) {
     say(err.message, true);
   }

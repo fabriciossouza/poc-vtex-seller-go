@@ -159,6 +159,33 @@ func (b *Bus) DeadLetters(ctx context.Context) ([]ports.DeadLetter, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read dead-letter queue: %w", err)
 	}
+	return lettersOf(msgs), nil
+}
+
+// RecentDeadLetters returns up to limit letters, newest first, and how many
+// the DLQ holds, so a panel can poll it without reading the whole stream.
+func (b *Bus) RecentDeadLetters(ctx context.Context, limit int) ([]ports.DeadLetter, int64, error) {
+	msgs, err := b.client.XRevRangeN(ctx, b.cfg.DLQ, "+", "-", int64(limit)).Result()
+	if err != nil {
+		return nil, 0, fmt.Errorf("read dead-letter queue: %w", err)
+	}
+	total, err := b.DLQDepth(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	return lettersOf(msgs), total, nil
+}
+
+// DLQDepth is the number of letters waiting in the DLQ (XLEN).
+func (b *Bus) DLQDepth(ctx context.Context) (int64, error) {
+	n, err := b.client.XLen(ctx, b.cfg.DLQ).Result()
+	if err != nil {
+		return 0, fmt.Errorf("measure dead-letter queue: %w", err)
+	}
+	return n, nil
+}
+
+func lettersOf(msgs []redis.XMessage) []ports.DeadLetter {
 	letters := make([]ports.DeadLetter, 0, len(msgs))
 	for _, m := range msgs {
 		event, _ := decodeEvent(m.Values)
@@ -168,7 +195,7 @@ func (b *Bus) DeadLetters(ctx context.Context) ([]ports.DeadLetter, error) {
 			ID: m.ID, Event: event, Reason: str(m.Values["reason"]), Attempts: attempts, FailedAt: failedAt,
 		})
 	}
-	return letters, nil
+	return letters
 }
 
 func (b *Bus) Discard(ctx context.Context, deadLetterID string) error {

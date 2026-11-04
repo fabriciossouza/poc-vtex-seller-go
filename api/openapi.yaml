@@ -393,6 +393,7 @@ components:
             consecutiveFailures: { type: integer }
             openTimeoutMs: { type: integer }
             retryInMs: { type: integer }
+        dlqTotal: { type: integer, description: Total de cartas na DLQ (a lista traz as 20 mais recentes). }
         dlq:
           type: array
           items:

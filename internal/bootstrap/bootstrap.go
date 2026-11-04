@@ -64,6 +64,9 @@ type App struct {
 	Close func()
 }
 
+// replayBatch bounds one DLQ replay so it finishes inside the HTTP write timeout.
+const replayBatch = 20
+
 type systemClock struct{}
 
 func (systemClock) Now() time.Time { return time.Now() }
@@ -99,7 +102,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 
 	seller := httpadapter.NewHandler(httpadapter.Deps{
 		Simulate:         app.NewSimulateCart(catalog, stock, shipping),
-		Place:            app.NewPlaceOrder(repo, systemClock{}, stock),
+		Place:            recordingPlacer{next: app.NewPlaceOrder(repo, systemClock{}, stock), tl: timeline},
 		Fulfill:          app.NewFulfillOrder(repo, bus),
 		Cancel:           app.NewCancelOrder(repo, stock),
 		ValidateEndpoint: marketplaceClient.ValidateEndpoint,
@@ -109,7 +112,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 
 	breaker := resilience.NewBreaker(cfg.Breaker, time.Now)
 	retrier := resilience.NewRetrier(cfg.Retry, resilience.SystemSleeper{}, nil)
-	w := worker.New(consumer, app.NewDispatchToERP(repo, erp, shipping, notifier), retrier, breaker)
+	w := worker.New(consumer, app.NewDispatchToERP(repo, erp, shipping, notifier), retrier, breaker, worker.WithReplayBatch(replayBatch))
 
 	controller := demo.NewController(demo.Deps{
 		Seller:             seller,
@@ -118,7 +121,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		Timeline:           timeline,
 		Breaker:            breaker,
 		BreakerOpenTimeout: cfg.Breaker.OpenTimeout,
-		DeadLetters:        consumer.DeadLetters,
+		DeadLetters:        rawBus.RecentDeadLetters,
 		Replay:             w.ReplayDLQ,
 		Stock:              func() []demo.StockLine { return stockLines(catalog, stock) },
 		SetERPFailing: func(ctx context.Context, failing bool) error {
@@ -134,11 +137,11 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 			func(context.Context) error { breaker.Reset(); return nil },
 			func(context.Context) error { stock.Reset(); return nil },
 			func(ctx context.Context) error {
-				return sendJSON(ctx, httpClient, http.MethodPost, cfg.ERPURL+"/admin/reset", nil)
-			},
-			func(ctx context.Context) error {
 				return sendJSON(ctx, httpClient, http.MethodPost, cfg.TMSURL+"/admin/reset", nil)
 			},
+		},
+		ResetERP: func(ctx context.Context) error {
+			return sendJSON(ctx, httpClient, http.MethodPost, cfg.ERPURL+"/admin/reset", nil)
 		},
 		InternalOnly: func(r *http.Request) bool { return ratelimit.IsInternal(r, cfg.InternalNets) },
 		NewID:        newID,
@@ -156,11 +159,13 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		return float64(breaker.Snapshot().ConsecutiveFailures)
 	})
 	metrics.Gauge("dlq_depth", "Messages waiting in the dead-letter queue.", func() float64 {
-		letters, err := consumer.DeadLetters(context.Background())
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		depth, err := rawBus.DLQDepth(ctx)
 		if err != nil {
 			return math.NaN()
 		}
-		return float64(len(letters))
+		return float64(depth)
 	})
 
 	root := http.NewServeMux()
