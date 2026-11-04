@@ -96,25 +96,27 @@ func (s slowTMS) QuoteShipping(ctx context.Context, items []domain.Item) (domain
 	}
 }
 
-func TestSimulationAnswersBeforeTheMarketplaceTimeoutWhenTheTMSIsSlow(t *testing.T) {
-	const marketplaceTimeout = 2500 * time.Millisecond
+func TestSimulationAnswersWithinItsBudgetWhenTheTMSIsSlow(t *testing.T) {
+	const budget = 50 * time.Millisecond
 	handler := httpadapter.NewHandler(httpadapter.Deps{
-		Simulate: app.NewSimulateCart(fakeCatalog{}, fakeStock{map[string]int{"6": 5}}, slowTMS{d: 2700 * time.Millisecond}),
-		Clock:    fixedClock{},
-		NewID:    func() string { return "x" },
+		Simulate:          app.NewSimulateCart(fakeCatalog{}, fakeStock{map[string]int{"6": 5}}, slowTMS{d: 5 * time.Second}),
+		SimulationTimeout: budget,
+		Clock:             fixedClock{},
+		NewID:             func() string { return "x" },
 	})
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 	e := &env{srv: srv}
 
 	start := time.Now()
-	status, _ := e.post(t, "/pvt/orderForms/simulation", readJSONFile(t, "simulation_request.json"))
+	status, got := e.post(t, "/pvt/orderForms/simulation", readJSONFile(t, "simulation_request.json"))
 	elapsed := time.Since(start)
 
-	if elapsed >= marketplaceTimeout {
-		t.Errorf("answered after %v, the marketplace gives up at %v", elapsed, marketplaceTimeout)
+	if elapsed >= 2*time.Second {
+		t.Errorf("answered after %v, the TMS needs 5s and the budget is %v", elapsed, budget)
 	}
-	if status == http.StatusOK {
-		t.Errorf("status = %d, a simulation that missed its budget must not look successful", status)
+	errBody, _ := got["error"].(map[string]any)
+	if status != http.StatusInternalServerError || errBody["code"] != "internal_error" {
+		t.Errorf("status = %d, body = %v, want 500 internal_error as for any TMS failure", status, got)
 	}
 }
