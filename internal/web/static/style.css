@@ -1,0 +1,29 @@
+:root { --bg:#fafafa; --fg:#1b1f23; --muted:#5b6670; --card:#fff; --line:#d9dee3; --accent:#1f5fbf; --ok:#17743a; --err:#b3261e; --warn:#8a5a00; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg:#14181c; --fg:#e8ecef; --muted:#9aa5ae; --card:#1c2227; --line:#313a42; --accent:#6ea8ff; --ok:#5fd18a; --err:#ff8a80; --warn:#f0b955; }
+}
+* { box-sizing: border-box; }
+body { margin:0; padding:0 16px 48px; font:15px/1.5 system-ui, sans-serif; background:var(--bg); color:var(--fg); }
+header, main { max-width:1000px; margin:0 auto; }
+h1 { font-size:1.5rem; margin:24px 0 8px; }
+h2 { font-size:1.05rem; margin:0 0 6px; }
+a { color:var(--accent); }
+#notice { min-height:1.5em; font-weight:600; }
+.status, .scenarios { display:grid; gap:12px; grid-template-columns:repeat(auto-fit, minmax(210px, 1fr)); margin:16px 0; }
+.tile, article, .order, .letter { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px; }
+.tile .label { display:block; color:var(--muted); font-size:.8rem; }
+.tile strong { font-size:1.2rem; }
+.tile small { display:block; color:var(--muted); }
+article p { color:var(--muted); margin:0 0 10px; }
+button { font:inherit; padding:8px 12px; margin:0 6px 6px 0; border:0; border-radius:6px; background:var(--accent); color:#fff; cursor:pointer; }
+button.secondary { background:transparent; color:var(--fg); border:1px solid var(--line); }
+button:disabled { opacity:.5; cursor:wait; }
+.order, .letter { margin-bottom:12px; }
+.order h3 { font-size:.95rem; margin:0 0 6px; word-break:break-all; }
+.badge { font-size:.75rem; padding:1px 8px; border-radius:99px; border:1px solid var(--line); margin-left:6px; }
+ul.events { list-style:none; margin:0; padding:0; font-size:.88rem; }
+ul.events li { padding:2px 0; border-top:1px solid var(--line); }
+ul.events time, ul.events .src { color:var(--muted); margin-right:8px; }
+.level-ok { color:var(--ok); } .level-error { color:var(--err); } .level-info { color:var(--fg); }
+.state-open { color:var(--err); } .state-half-open { color:var(--warn); } .state-closed { color:var(--ok); }
+.empty { color:var(--muted); }

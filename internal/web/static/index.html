@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Seller externo VTEX em Go</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <header>
+    <h1>Seller externo VTEX em Go</h1>
+    <p>
+      Este serviço implementa o protocolo de seller externo da VTEX. O marketplace aqui é um simulador que segue
+      o contrato documentado; não é uma loja VTEX real. O estado é limpo sozinho a cada hora.
+      <a href="/docs/">Documentação da API (OpenAPI)</a>
+    </p>
+    <p id="notice" role="status"></p>
+  </header>
+
+  <main>
+    <section aria-label="Estado dos componentes" class="status">
+      <div class="tile"><span class="label">Circuit breaker</span><strong id="breaker-state">-</strong><small id="breaker-detail"></small></div>
+      <div class="tile"><span class="label">ERP (mock)</span><strong id="erp-state">-</strong></div>
+      <div class="tile"><span class="label">Fila de falhas (DLQ)</span><strong id="dlq-count">-</strong></div>
+      <div class="tile"><span class="label">Estoque</span><small id="stock-list"></small></div>
+    </section>
+
+    <section aria-label="Cenários" class="scenarios">
+      <article>
+        <h2>1. Pedido duplicado</h2>
+        <p>O marketplace repete o mesmo pedido. Prova a idempotência: continua existindo um único pedido e o estoque é reservado uma vez.</p>
+        <button id="btn-dup">Enviar o mesmo pedido 2 vezes</button>
+      </article>
+      <article>
+        <h2>2. Derrubar o ERP</h2>
+        <p>Com o ERP fora do ar, o worker tenta de novo com espera crescente, o circuit breaker abre e a mensagem vai para a DLQ com o motivo.</p>
+        <button id="btn-down">Derrubar o ERP e enviar um pedido</button>
+      </article>
+      <article>
+        <h2>3. Religar e reprocessar</h2>
+        <p>Depois de religar o ERP e esperar o breaker voltar a testar, reprocessar a DLQ conclui o pedido sem duplicar nada no ERP.</p>
+        <button id="btn-up">Religar o ERP</button>
+        <button id="btn-replay">Reprocessar a DLQ</button>
+      </article>
+      <article>
+        <h2>4. Fluxo feliz</h2>
+        <p>Simulação, pedido, autorização, ERP, TMS e nota com o rastreio de volta ao marketplace.</p>
+        <button id="btn-happy">Pedido completo até o rastreio</button>
+      </article>
+    </section>
+
+    <p><button id="btn-reset" class="secondary">Resetar a demo</button></p>
+
+    <section aria-label="Linha do tempo">
+      <h2>Linha do tempo dos pedidos</h2>
+      <div id="orders"><p class="empty">Nenhum pedido ainda. Escolha um cenário.</p></div>
+    </section>
+
+    <section aria-label="DLQ">
+      <h2>Conteúdo da DLQ</h2>
+      <div id="dlq"><p class="empty">A DLQ está vazia.</p></div>
+    </section>
+  </main>
+  <script src="/assets/app.js"></script>
+</body>
+</html>
