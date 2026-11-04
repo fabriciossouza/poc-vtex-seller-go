@@ -42,14 +42,23 @@
             "X-Forwarded-For": [
               "{http.request.remote.host}"
             ]
-          }
+          },
+          "delete": [
+            "Forwarded",
+            "X-Real-Ip"
+          ]
         }
       },
       "upstreams": [
         {
           "dial": "127.0.0.1:8094"
         }
-      ]
+      ],
+      "transport": {
+        "protocol": "http",
+        "dial_timeout": "2s",
+        "response_header_timeout": "30s"
+      }
     }
   ],
   "terminal": true

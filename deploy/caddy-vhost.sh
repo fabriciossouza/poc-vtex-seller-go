@@ -4,11 +4,13 @@
 #   servidor  só leitura: nome do servidor HTTP que escuta na porta HTTPS (para se não houver exatamente um)
 #   sitios    só leitura: código HTTP de cada host configurado no Caddy (rode antes e depois e compare)
 #   aplicar   salva a config inteira em $BACKUP_DIR, confere que o @id não existe, insere a rota na posição 0
-#             do servidor HTTPS (PUT em .../routes/0 insere, não substitui) e confere o resultado
-#   remover   DELETE /id/poc-vtex: tira só a rota da POC
+#             do servidor HTTPS (PUT em .../routes/0 insere, não substitui) e confere o resultado;
+#             se a conferência falhar, remove a rota sozinho
+#   remover   DELETE /id/poc-vtex: tira só a rota da POC (idempotente: sai 0 se ela não existe)
 # Variáveis: ADMIN (localhost:2019), PORTA_HTTPS (443), VHOST_JSON (caddy-vhost.json ao lado do script),
 #            BACKUP_DIR ($HOME; a pasta do repo é de root).
 set -eu
+umask 077
 
 ADMIN=${ADMIN:-localhost:2019}
 PORTA_HTTPS=${PORTA_HTTPS:-443}
@@ -41,6 +43,7 @@ def andar(x):
             andar(v)
 andar(json.load(sys.stdin))
 print("\n".join(sorted(hosts)))' | while read -r h; do
+    [ -n "$h" ] || continue
     printf '%s %s\n' "$h" "$(curl -sk -o /dev/null -m 10 -w '%{http_code}' --resolve "$h:$PORTA_HTTPS:127.0.0.1" "https://$h:$PORTA_HTTPS/" || true)"
   done
 }
@@ -62,14 +65,27 @@ case "${1:-}" in
     copia="$BACKUP_DIR/caddy-antes-$ID-$(date +%Y%m%d-%H%M%S).json"
     curl -fsS "$ADMIN/config/" > "$copia"
     antes=$(total_rotas "$srv")
-    curl -fsS -X PUT "$ADMIN/config/apps/http/servers/$srv/routes/0" \
-      -H 'Content-Type: application/json' --data-binary @"$VHOST_JSON" >/dev/null
-    depois=$(total_rotas "$srv")
-    primeira=$(curl -fsS "$ADMIN/config/apps/http/servers/$srv/routes/0" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("@id"))')
-    echo "servidor=$srv rotas $antes -> $depois, posição 0 = $primeira, cópia da config anterior: $copia"
-    [ "$depois" -eq $((antes + 1)) ] && [ "$primeira" = "$ID" ]
+    if ! curl -fsS -X PUT "$ADMIN/config/apps/http/servers/$srv/routes/0" \
+      -H 'Content-Type: application/json' --data-binary @"$VHOST_JSON" >/dev/null; then
+      echo "PUT falhou" >&2
+      curl -fsS -X DELETE "$ADMIN/id/$ID" >/dev/null 2>&1 || true
+      exit 1
+    fi
+    ok=0
+    depois=$(total_rotas "$srv") && primeira=$(curl -fsS "$ADMIN/config/apps/http/servers/$srv/routes/0" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("@id"))') && ok=1
+    echo "servidor=$srv rotas $antes -> ${depois:-?}, posição 0 = ${primeira:-?}, cópia da config anterior: $copia"
+    if [ "$ok" = 1 ] && [ "$depois" -eq $((antes + 1)) ] && [ "$primeira" = "$ID" ]; then
+      exit 0
+    fi
+    echo "conferência falhou: removendo a rota $ID" >&2
+    curl -fsS -X DELETE "$ADMIN/id/$ID" >/dev/null || true
+    exit 1
     ;;
   remover)
+    if [ "$(curl -s -o /dev/null -w '%{http_code}' "$ADMIN/id/$ID")" != 200 ]; then
+      echo "a rota $ID não existe; nada a remover"
+      exit 0
+    fi
     curl -fsS -X DELETE "$ADMIN/id/$ID" >/dev/null && echo "rota $ID removida"
     ;;
   *)
