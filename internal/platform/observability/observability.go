@@ -52,9 +52,21 @@ func (m *Metrics) Middleware(next http.Handler) http.Handler {
 		if route == "" {
 			route = "unmatched"
 		}
-		m.requests.WithLabelValues(r.Method, route, strconv.Itoa(rec.status)).Inc()
-		m.duration.WithLabelValues(r.Method, route).Observe(time.Since(start).Seconds())
+		method := metricMethod(r.Method)
+		m.requests.WithLabelValues(method, route, strconv.Itoa(rec.status)).Inc()
+		m.duration.WithLabelValues(method, route).Observe(time.Since(start).Seconds())
 	})
+}
+
+// metricMethod keeps the label set finite: any method outside the standard
+// list, which a client can invent freely, is reported as OTHER.
+func metricMethod(method string) string {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch,
+		http.MethodDelete, http.MethodConnect, http.MethodOptions, http.MethodTrace:
+		return method
+	}
+	return "OTHER"
 }
 
 // RequestLog writes one line per request. It logs the path without the query
