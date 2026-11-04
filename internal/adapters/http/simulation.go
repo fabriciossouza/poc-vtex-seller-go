@@ -1,6 +1,7 @@
 package httpadapter
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -8,6 +9,10 @@ import (
 
 	"github.com/fabriciossouza/poc-vtex-seller-go/internal/domain"
 )
+
+// simulationBudget keeps the whole simulation under the 2.5s the marketplace
+// waits, whatever each dependency's own timeout is.
+const simulationBudget = 2 * time.Second
 
 type simulationRequest struct {
 	PostalCode string `json:"postalCode"`
@@ -71,7 +76,9 @@ func (h *handler) simulate(w http.ResponseWriter, r *http.Request) {
 		items[i] = domain.Item{SKU: it.ID, Quantity: it.Quantity}
 	}
 
-	sim, err := h.Simulate.Execute(r.Context(), items)
+	ctx, cancel := context.WithTimeout(r.Context(), simulationBudget)
+	defer cancel()
+	sim, err := h.Simulate.Execute(ctx, items)
 	if err != nil {
 		writeDomainError(w, err)
 		return
