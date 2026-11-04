@@ -27,6 +27,9 @@ var allowed = map[string][]string{
 	// Platform code is wired in main; domain, ports and app never import it.
 	"platform":            {"domain", "ports", "app", "platform/resilience"},
 	"platform/resilience": {},
+	// The demo simulates the marketplace; it drives the use cases through
+	// the HTTP handler and the worker, never through an adapter.
+	"demo": {"domain", "ports", "platform/resilience", "platform/worker"},
 }
 
 func TestLayersOnlyImportAllowedInternalPackages(t *testing.T) {

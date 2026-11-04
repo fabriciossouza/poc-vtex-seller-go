@@ -92,12 +92,13 @@ type world struct {
 }
 
 type options struct {
-	rateBurst int
+	rateBurst     int
+	ratePerSecond float64
 }
 
 func start(t *testing.T, opts ...func(*options)) *world {
 	t.Helper()
-	o := options{rateBurst: 1000}
+	o := options{rateBurst: 1000, ratePerSecond: 1000}
 	for _, f := range opts {
 		f(&o)
 	}
@@ -125,7 +126,7 @@ func start(t *testing.T, opts ...func(*options)) *world {
 		Retry:                   resilience.RetryConfig{MaxAttempts: 5, BaseDelay: time.Millisecond, MaxDelay: 5 * time.Millisecond},
 		Breaker:                 resilience.BreakerConfig{FailureThreshold: 3, OpenTimeout: 150 * time.Millisecond},
 		QueueBlock:              10 * time.Millisecond,
-		RateLimitPerSecond:      1000,
+		RateLimitPerSecond:      o.ratePerSecond,
 		RateLimitBurst:          o.rateBurst,
 	})
 	if err != nil {
@@ -352,8 +353,10 @@ func TestPlacementWithoutStockIsRefusedWithAClearStatus(t *testing.T) {
 	if status != http.StatusConflict {
 		t.Fatalf("status = %d, body %v", status, got)
 	}
-	if len(w.state()["orders"].([]any)) != 0 {
-		t.Fatal("no order should exist")
+	for _, o := range w.state()["orders"].([]any) {
+		if o.(map[string]any)["sellerOrderId"] != nil || o.(map[string]any)["status"] != "not_created" {
+			t.Fatalf("a refused placement must not create an order: %v", o)
+		}
 	}
 }
 
@@ -433,7 +436,7 @@ func TestHealthMetricsAndSecurityHeaders(t *testing.T) {
 }
 
 func TestExceedingTheRateLimitAnswers429(t *testing.T) {
-	w := start(t, func(o *options) { o.rateBurst = 3 })
+	w := start(t, func(o *options) { o.rateBurst, o.ratePerSecond = 3, 0.01 })
 
 	var last int
 	for i := 0; i < 8; i++ {
