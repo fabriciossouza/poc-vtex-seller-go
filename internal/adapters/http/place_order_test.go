@@ -160,3 +160,21 @@ func TestPlacementAndSimulationLimitTheNumberOfItems(t *testing.T) {
 		t.Errorf("simulation with 51 items: status = %d, want 400", status)
 	}
 }
+
+func TestPlacementWithoutStockIsAConflictAndStoresNothing(t *testing.T) {
+	e := newEnv(t, nil)
+	body := readJSONFile(t, "order_placement_request.json")
+	body["items"].([]any)[0].(map[string]any)["id"] = "sold-out"
+
+	status, got := e.post(t, "/pvt/orders", body)
+
+	if status != http.StatusConflict {
+		t.Fatalf("status = %d, body = %v", status, got)
+	}
+	if code := got["error"].(map[string]any)["code"]; code != "insufficient_stock" {
+		t.Fatalf("code = %v", code)
+	}
+	if len(e.repo.byID) != 0 {
+		t.Fatalf("orders stored = %d", len(e.repo.byID))
+	}
+}

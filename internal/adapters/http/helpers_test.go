@@ -18,6 +18,7 @@ import (
 	httpadapter "github.com/fabriciossouza/poc-vtex-seller-go/internal/adapters/http"
 	"github.com/fabriciossouza/poc-vtex-seller-go/internal/app"
 	"github.com/fabriciossouza/poc-vtex-seller-go/internal/domain"
+	"github.com/fabriciossouza/poc-vtex-seller-go/internal/ports"
 )
 
 var fixedNow = time.Date(2026, 11, 4, 18, 52, 0, 0, time.UTC)
@@ -33,6 +34,18 @@ func (fakeCatalog) UnitPriceCents(context.Context, string) (int64, error) { retu
 type fakeStock struct{ levels map[string]int }
 
 func (f fakeStock) Available(_ context.Context, sku string) (int, error) { return f.levels[sku], nil }
+
+// soldOutReserver accepts every reservation except for the sku "sold-out".
+type soldOutReserver struct{}
+
+func (soldOutReserver) Reserve(_ context.Context, sku string, _ int) error {
+	if sku == "sold-out" {
+		return ports.ErrInsufficientStock
+	}
+	return nil
+}
+
+func (soldOutReserver) Release(context.Context, string, int) error { return nil }
 
 type fakeTMS struct{}
 
@@ -94,7 +107,7 @@ func newEnv(t *testing.T, stock map[string]int) *env {
 	ids := 0
 	handler := httpadapter.NewHandler(httpadapter.Deps{
 		Simulate: app.NewSimulateCart(fakeCatalog{}, fakeStock{stock}, fakeTMS{}),
-		Place:    app.NewPlaceOrder(repo, fixedClock{}),
+		Place:    app.NewPlaceOrder(repo, fixedClock{}, soldOutReserver{}),
 		Fulfill:  app.NewFulfillOrder(repo, bus),
 		Cancel:   app.NewCancelOrder(repo),
 		Clock:    fixedClock{},

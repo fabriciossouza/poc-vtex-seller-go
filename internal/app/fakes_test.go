@@ -2,6 +2,7 @@ package app_test
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/fabriciossouza/poc-vtex-seller-go/internal/domain"
@@ -127,3 +128,21 @@ func (b *fakeBus) Publish(_ context.Context, e domain.Event) error {
 type fixedClock struct{ t time.Time }
 
 func (c fixedClock) Now() time.Time { return c.t }
+
+type fakeReserver struct {
+	calls   []string
+	failSKU string
+}
+
+func (f *fakeReserver) Reserve(_ context.Context, sku string, qty int) error {
+	f.calls = append(f.calls, fmt.Sprintf("reserve %s %d", sku, qty))
+	if sku == f.failSKU {
+		return ports.ErrInsufficientStock
+	}
+	return nil
+}
+
+func (f *fakeReserver) Release(_ context.Context, sku string, qty int) error {
+	f.calls = append(f.calls, fmt.Sprintf("release %s %d", sku, qty))
+	return nil
+}

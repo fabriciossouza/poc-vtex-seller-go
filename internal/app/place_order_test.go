@@ -3,18 +3,20 @@ package app_test
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/fabriciossouza/poc-vtex-seller-go/internal/app"
 	"github.com/fabriciossouza/poc-vtex-seller-go/internal/domain"
+	"github.com/fabriciossouza/poc-vtex-seller-go/internal/ports"
 )
 
 var testNow = time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
 
 func TestPlaceOrderIsIdempotentByKey(t *testing.T) {
 	repo := newMemRepo()
-	uc := app.NewPlaceOrder(repo, fixedClock{testNow})
+	uc := app.NewPlaceOrder(repo, fixedClock{testNow}, &fakeReserver{})
 	cmd := app.PlaceOrderCommand{
 		OrderID:        "ord-1",
 		IdempotencyKey: "key-1",
@@ -43,7 +45,7 @@ func TestPlaceOrderIsIdempotentByKey(t *testing.T) {
 }
 
 func TestPlaceOrderRejectsInvalidOrder(t *testing.T) {
-	uc := app.NewPlaceOrder(newMemRepo(), fixedClock{testNow})
+	uc := app.NewPlaceOrder(newMemRepo(), fixedClock{testNow}, &fakeReserver{})
 	_, err := uc.Execute(context.Background(), app.PlaceOrderCommand{OrderID: "o", IdempotencyKey: "k"})
 	if !errors.Is(err, domain.ErrInvalidOrder) {
 		t.Fatalf("err = %v", err)
@@ -52,7 +54,7 @@ func TestPlaceOrderRejectsInvalidOrder(t *testing.T) {
 
 func TestPlaceOrderKeepsMarketplaceEndpointAndItemPrice(t *testing.T) {
 	repo := newMemRepo()
-	uc := app.NewPlaceOrder(repo, fixedClock{testNow})
+	uc := app.NewPlaceOrder(repo, fixedClock{testNow}, &fakeReserver{})
 
 	order, err := uc.Execute(context.Background(), app.PlaceOrderCommand{
 		OrderID:             "ord-1",
@@ -67,5 +69,94 @@ func TestPlaceOrderKeepsMarketplaceEndpointAndItemPrice(t *testing.T) {
 	stored, _ := repo.Get(context.Background(), order.ID)
 	if stored.MarketplaceEndpoint != "https://marketplace.example/" || stored.Items[0].PriceCents != 2499 {
 		t.Fatalf("stored = %+v", stored)
+	}
+}
+
+func placeCmd(items ...domain.Item) app.PlaceOrderCommand {
+	return app.PlaceOrderCommand{OrderID: "ord-1", IdempotencyKey: "key-1", Items: items}
+}
+
+func TestPlaceOrderReservesStockForEachItemOfANewOrder(t *testing.T) {
+	stock := &fakeReserver{}
+	uc := app.NewPlaceOrder(newMemRepo(), fixedClock{testNow}, stock)
+
+	_, err := uc.Execute(context.Background(), placeCmd(domain.Item{SKU: "a", Quantity: 2}, domain.Item{SKU: "b", Quantity: 1}))
+
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if want := []string{"reserve a 2", "reserve b 1"}; !reflect.DeepEqual(stock.calls, want) {
+		t.Fatalf("calls = %v, want %v", stock.calls, want)
+	}
+}
+
+func TestPlaceOrderDoesNotReserveAgainForARepeatedKey(t *testing.T) {
+	stock := &fakeReserver{}
+	uc := app.NewPlaceOrder(newMemRepo(), fixedClock{testNow}, stock)
+	cmd := placeCmd(domain.Item{SKU: "a", Quantity: 2})
+	_, _ = uc.Execute(context.Background(), cmd)
+
+	_, err := uc.Execute(context.Background(), cmd)
+
+	if err != nil || len(stock.calls) != 1 {
+		t.Fatalf("err = %v, calls = %v; want a single reservation", err, stock.calls)
+	}
+}
+
+func TestPlaceOrderWithoutStockFailsReleasesWhatWasReservedAndStoresNothing(t *testing.T) {
+	stock := &fakeReserver{failSKU: "b"}
+	repo := newMemRepo()
+	uc := app.NewPlaceOrder(repo, fixedClock{testNow}, stock)
+
+	_, err := uc.Execute(context.Background(), placeCmd(domain.Item{SKU: "a", Quantity: 2}, domain.Item{SKU: "b", Quantity: 1}))
+
+	if !errors.Is(err, ports.ErrInsufficientStock) {
+		t.Fatalf("err = %v, want ErrInsufficientStock", err)
+	}
+	if want := []string{"reserve a 2", "reserve b 1", "release a 2"}; !reflect.DeepEqual(stock.calls, want) {
+		t.Fatalf("calls = %v, want %v", stock.calls, want)
+	}
+	if len(repo.byID) != 0 {
+		t.Fatalf("orders stored = %d", len(repo.byID))
+	}
+}
+
+type failingRepo struct{ *memRepo }
+
+func (failingRepo) Save(context.Context, *domain.Order) error { return errors.New("disk full") }
+
+func TestPlaceOrderReleasesTheReservationWhenSavingFails(t *testing.T) {
+	stock := &fakeReserver{}
+	uc := app.NewPlaceOrder(failingRepo{newMemRepo()}, fixedClock{testNow}, stock)
+
+	_, err := uc.Execute(context.Background(), placeCmd(domain.Item{SKU: "a", Quantity: 2}))
+
+	if err == nil {
+		t.Fatal("want the save error")
+	}
+	if want := []string{"reserve a 2", "release a 2"}; !reflect.DeepEqual(stock.calls, want) {
+		t.Fatalf("calls = %v, want %v", stock.calls, want)
+	}
+}
+
+// racedRepo mimics a concurrent placement of the same key winning the insert.
+type racedRepo struct{ *memRepo }
+
+func (racedRepo) Save(_ context.Context, o *domain.Order) error {
+	*o = domain.Order{ID: "winner", IdempotencyKey: o.IdempotencyKey, Items: o.Items, Status: domain.StatusReceived}
+	return nil
+}
+
+func TestPlaceOrderReleasesTheReservationWhenAConcurrentPlacementWon(t *testing.T) {
+	stock := &fakeReserver{}
+	uc := app.NewPlaceOrder(racedRepo{newMemRepo()}, fixedClock{testNow}, stock)
+
+	order, err := uc.Execute(context.Background(), placeCmd(domain.Item{SKU: "a", Quantity: 2}))
+
+	if err != nil || order.ID != "winner" {
+		t.Fatalf("order = %+v, err = %v", order, err)
+	}
+	if want := []string{"reserve a 2", "release a 2"}; !reflect.DeepEqual(stock.calls, want) {
+		t.Fatalf("calls = %v, want %v", stock.calls, want)
 	}
 }
