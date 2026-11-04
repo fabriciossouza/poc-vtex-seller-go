@@ -1,0 +1,144 @@
+package sqlite_test
+
+import (
+	"context"
+	"errors"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/fabriciossouza/poc-vtex-seller-go/internal/adapters/sqlite"
+	"github.com/fabriciossouza/poc-vtex-seller-go/internal/domain"
+)
+
+var createdAt = time.Date(2026, 11, 4, 12, 0, 0, 123, time.UTC)
+
+func openRepo(t *testing.T) *sqlite.Repo {
+	t.Helper()
+	repo, err := sqlite.Open(filepath.Join(t.TempDir(), "orders.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+	return repo
+}
+
+func newOrder(t *testing.T, id, key string) *domain.Order {
+	t.Helper()
+	o, err := domain.NewOrder(id, key, []domain.Item{{SKU: "6", Quantity: 2, PriceCents: 2499}}, createdAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o.MarketplaceEndpoint = "https://marketplace.example/"
+	return o
+}
+
+func TestSaveThenGetAndFindByKeyReturnTheSameOrder(t *testing.T) {
+	ctx := context.Background()
+	repo := openRepo(t)
+	order := newOrder(t, "ord-1", "mkt-1")
+	if err := repo.Save(ctx, order); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	byID, err := repo.Get(ctx, "ord-1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	byKey, err := repo.FindByIdempotencyKey(ctx, "mkt-1")
+	if err != nil {
+		t.Fatalf("FindByIdempotencyKey: %v", err)
+	}
+
+	for _, got := range []*domain.Order{byID, byKey} {
+		if got.ID != "ord-1" || got.IdempotencyKey != "mkt-1" || got.Status != domain.StatusReceived ||
+			!got.CreatedAt.Equal(createdAt) || got.MarketplaceEndpoint != "https://marketplace.example/" ||
+			len(got.Items) != 1 || got.Items[0] != (domain.Item{SKU: "6", Quantity: 2, PriceCents: 2499}) {
+			t.Fatalf("got %+v", got)
+		}
+	}
+}
+
+func TestUnknownOrderIsReportedAsNotFound(t *testing.T) {
+	repo := openRepo(t)
+	if _, err := repo.Get(context.Background(), "nope"); !errors.Is(err, domain.ErrOrderNotFound) {
+		t.Fatalf("Get err = %v", err)
+	}
+	if _, err := repo.FindByIdempotencyKey(context.Background(), "nope"); !errors.Is(err, domain.ErrOrderNotFound) {
+		t.Fatalf("Find err = %v", err)
+	}
+}
+
+func TestSaveUpdatesStatusAndTrackingOfAnExistingOrder(t *testing.T) {
+	ctx := context.Background()
+	repo := openRepo(t)
+	order := newOrder(t, "ord-1", "mkt-1")
+	_ = repo.Save(ctx, order)
+	_ = order.Authorize()
+	_ = order.MarkSentToERP()
+	_ = order.MarkShipped("TRK-1")
+
+	if err := repo.Save(ctx, order); err != nil {
+		t.Fatalf("Save update: %v", err)
+	}
+
+	got, _ := repo.Get(ctx, "ord-1")
+	if got.Status != domain.StatusShipped || got.TrackingCode != "TRK-1" {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestConcurrentSavesWithTheSameKeyYieldASingleOrder(t *testing.T) {
+	ctx := context.Background()
+	repo := openRepo(t)
+	const workers = 20
+
+	var wg sync.WaitGroup
+	saved := make([]*domain.Order, workers)
+	errs := make([]error, workers)
+	start := make(chan struct{})
+	for i := range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			saved[i] = newOrder(t, "ord-"+string(rune('a'+i)), "mkt-1")
+			<-start
+			errs[i] = repo.Save(ctx, saved[i])
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	winner := saved[0].ID
+	for i := range workers {
+		if errs[i] != nil {
+			t.Fatalf("worker %d: %v", i, errs[i])
+		}
+		if saved[i].ID != winner {
+			t.Fatalf("worker %d got order %s, want the existing %s", i, saved[i].ID, winner)
+		}
+	}
+	if n := repo.Count(ctx); n != 1 {
+		t.Fatalf("orders stored = %d, want 1", n)
+	}
+}
+
+func TestOrdersSurviveReopeningTheDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "orders.db")
+	first, err := sqlite.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = first.Save(context.Background(), newOrder(t, "ord-1", "mkt-1"))
+	_ = first.Close()
+
+	second, err := sqlite.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	if _, err := second.Get(context.Background(), "ord-1"); err != nil {
+		t.Fatalf("Get after reopen: %v", err)
+	}
+}
