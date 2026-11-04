@@ -3,16 +3,16 @@ info:
   title: Seller externo VTEX em Go (POC)
   version: 1.0.0
   description: |
-    Implementa o protocolo de seller externo da VTEX (o marketplace chama o seller) e uma superficie de
-    demonstracao. O marketplace desta demo e um simulador que segue o contrato documentado em
-    developers.vtex.com; nao e uma loja VTEX real.
+    Implementa o protocolo de seller externo da VTEX (o marketplace chama o seller) e uma superfície de
+    demonstração. O marketplace desta demo é um simulador que segue o contrato documentado em
+    developers.vtex.com; não é uma loja VTEX real.
 
     Os endpoints `/pvt/...` sao os do protocolo. Os endpoints `/demo/...` comandam o simulador:
     use `POST /demo/orders` e `POST /demo/orders/{marketplaceOrderId}/fulfill` para um fluxo pronto.
     Chamar `POST /pvt/orders` direto exige que `marketplaceServicesEndpoint` esteja na allowlist do servidor
-    (protecao contra SSRF); fora dela a resposta e 400.
+    (protecao contra SSRF); fora dela a resposta é 400.
 
-    O uso e limitado por IP: excedendo, a resposta e 429 com `Retry-After`.
+    O uso é limitado por IP: excedendo, a resposta é 429 com `Retry-After`.
 servers:
   - url: /
 tags:
@@ -20,12 +20,12 @@ tags:
     description: Chamados pelo marketplace.
   - name: Demo
     description: Simulador de marketplace e controles do painel.
-  - name: Operacao
+  - name: Operação
 paths:
   /pvt/orderForms/simulation:
     post:
       tags: [Protocolo de seller externo]
-      summary: Simulacao de carrinho (preco, estoque e frete)
+      summary: Simulação de carrinho (preço, estoque e frete)
       requestBody:
         required: true
         content:
@@ -37,7 +37,7 @@ paths:
               items: [{ id: '6', quantity: 1, seller: '01' }]
       responses:
         '200':
-          description: Itens com preco, saldo de estoque e SLAs de entrega (sem SLA quando nao ha estoque).
+          description: Itens com preço, saldo de estoque e SLAs de entrega (sem SLA quando não há estoque).
           content:
             application/json:
               schema: { $ref: '#/components/schemas/SimulationResponse' }
@@ -48,8 +48,8 @@ paths:
       tags: [Protocolo de seller externo]
       summary: Order placement (idempotente por marketplaceOrderId)
       description: |
-        Repetir o mesmo `marketplaceOrderId` devolve o pedido criado na primeira vez e nao reserva estoque de novo.
-        Reserva estoque ao criar; sem estoque a resposta e 409.
+        Repetir o mesmo `marketplaceOrderId` devolve o pedido criado na primeira vez e não reserva estoque de novo.
+        Reserva estoque ao criar; sem estoque a resposta é 409.
       requestBody:
         required: true
         content:
@@ -57,7 +57,7 @@ paths:
             schema: { $ref: '#/components/schemas/PlacementRequest' }
       responses:
         '200':
-          description: Pedido criado (ou o ja existente).
+          description: Pedido criado (ou o já existente).
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PlacementResponse' }
@@ -122,8 +122,8 @@ paths:
   /demo/orders:
     post:
       tags: [Demo]
-      summary: O simulador faz simulacao e placement
-      description: Todos os campos sao opcionais. Repetir o mesmo `marketplaceOrderId` mostra a idempotencia (`duplicate: true`).
+      summary: O simulador faz simulação e placement
+      description: 'Todos os campos são opcionais. Repetir o mesmo `marketplaceOrderId` mostra a idempotência (`duplicate: true`).'
       requestBody:
         content:
           application/json:
@@ -131,7 +131,7 @@ paths:
               type: object
               properties:
                 marketplaceOrderId: { type: string, pattern: '^[A-Za-z0-9-]{1,40}$' }
-                sku: { type: string, default: '6', description: 'SKUs da demo: 6, 7, 8 e 9 (o 9 esta sem estoque).' }
+                sku: { type: string, default: '6', description: 'SKUs da demo: 6, 7, 8 e 9 (o 9 está sem estoque).' }
                 quantity: { type: integer, minimum: 1, maximum: 10, default: 1 }
       responses:
         '200':
@@ -231,23 +231,23 @@ paths:
     post:
       tags: [Demo]
       summary: Limpa pedidos, filas, breaker, estoque e mocks
-      description: A demo tambem se limpa sozinha a cada hora.
+      description: A demo também se limpa sozinha a cada hora.
       responses:
         '200': { description: Estado limpo. }
   /healthz:
     get:
-      tags: [Operacao]
-      summary: Saude do servico (inclui o Redis)
+      tags: [Operação]
+      summary: Saúde do serviço (inclui o Redis)
       responses:
         '200': { description: ok }
-        '503': { description: Redis indisponivel }
+        '503': { description: Redis indisponível }
   /metrics:
     get:
-      tags: [Operacao]
-      summary: Metricas no formato Prometheus
+      tags: [Operação]
+      summary: Métricas no formato Prometheus
       responses:
         '200':
-          description: Texto de exposicao do Prometheus.
+          description: Texto de exposição do Prometheus.
           content:
             text/plain:
               schema: { type: string }
@@ -266,7 +266,7 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
     RateLimited:
-      description: Muitas requisicoes deste IP.
+      description: Muitas requisições deste IP.
       headers:
         Retry-After: { schema: { type: string } }
       content:

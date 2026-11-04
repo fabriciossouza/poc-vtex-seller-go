@@ -8,7 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fabriciossouza/poc-vtex-seller-go/api"
 	"github.com/fabriciossouza/poc-vtex-seller-go/internal/web"
+	"gopkg.in/yaml.v3"
 )
 
 func get(t *testing.T, path string) (int, string, string) {
@@ -97,5 +99,34 @@ func TestSpecDescribesEveryEndpointOfTheServer(t *testing.T) {
 func TestVendoredSwaggerKeepsItsLicense(t *testing.T) {
 	if status, _, body := get(t, "/docs/swagger/LICENSE"); status != 200 || !strings.Contains(body, "Apache License") {
 		t.Fatalf("license: status %d", status)
+	}
+}
+
+func TestSpecIsValidYAMLWithOpenAPI3AndTheMainPaths(t *testing.T) {
+	var doc struct {
+		OpenAPI string                    `yaml:"openapi"`
+		Paths   map[string]map[string]any `yaml:"paths"`
+	}
+	if err := yaml.Unmarshal(api.Spec, &doc); err != nil {
+		t.Fatalf("spec is not valid YAML: %v", err)
+	}
+	if !strings.HasPrefix(doc.OpenAPI, "3.") {
+		t.Errorf("openapi = %q, want 3.x", doc.OpenAPI)
+	}
+	for path, method := range map[string]string{
+		"/pvt/orderForms/simulation": "post", "/pvt/orders": "post",
+		"/pvt/orders/{sellerOrderId}/fulfill": "post", "/demo/state": "get", "/healthz": "get",
+	} {
+		if _, ok := doc.Paths[path][method]; !ok {
+			t.Errorf("spec lacks %s %s", method, path)
+		}
+	}
+}
+
+func TestSpecTextIsWrittenWithAccents(t *testing.T) {
+	for _, word := range []string{"simulacao", "Simulacao", "nao ", "preco", "requisicoes", "Saude", "servico", "Metricas", "Operacao", "demonstracao", "superficie"} {
+		if strings.Contains(string(api.Spec), word) {
+			t.Errorf("spec has %q without accent", word)
+		}
 	}
 }
