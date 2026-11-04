@@ -22,6 +22,10 @@ var (
 	ErrInvalidOrder      = errors.New("invalid order")
 	ErrInvalidTransition = errors.New("invalid order transition")
 	ErrOrderNotFound     = errors.New("order not found")
+	// ErrCancellationEvaluating means the order already reached the ERP or the
+	// carrier: it is neither cancelled nor refused here, the marketplace gets
+	// the invoice as the refusal.
+	ErrCancellationEvaluating = errors.New("cancellation under evaluation")
 )
 
 // TransitionError carries the rejected transition so callers can log or map it.
@@ -121,7 +125,7 @@ func (o *Order) Fail() error {
 }
 
 func (o *Order) Cancel() error {
-	return o.transition(StatusCancelled, StatusReceived, StatusAuthorized, StatusSentToERP)
+	return o.transition(StatusCancelled, StatusReceived, StatusAuthorized)
 }
 
 func (o *Order) transition(to OrderStatus, allowedFrom ...OrderStatus) error {

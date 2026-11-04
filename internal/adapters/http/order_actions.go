@@ -1,6 +1,11 @@
 package httpadapter
 
-import "net/http"
+import (
+	"errors"
+	"net/http"
+
+	"github.com/fabriciossouza/poc-vtex-seller-go/internal/domain"
+)
 
 type receiptResponse struct {
 	Date               string `json:"date"`
@@ -52,7 +57,14 @@ func (h *handler) cancel(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) act(w http.ResponseWriter, r *http.Request, action OrderAction, marketplaceOrderID string) {
 	orderID := r.PathValue("sellerOrderId")
-	if err := action.Execute(r.Context(), orderID, marketplaceOrderID); err != nil {
+	err := action.Execute(r.Context(), orderID, marketplaceOrderID)
+	if errors.Is(err, domain.ErrCancellationEvaluating) {
+		// An empty 200 tells the marketplace the cancellation is being
+		// evaluated; sending the invoice later is the refusal.
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if err != nil {
 		writeDomainError(w, err)
 		return
 	}

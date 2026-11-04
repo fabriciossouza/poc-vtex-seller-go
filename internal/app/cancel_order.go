@@ -26,6 +26,9 @@ func (uc *CancelOrder) Execute(ctx context.Context, orderID, marketplaceOrderID 
 	if order.IdempotencyKey != marketplaceOrderID {
 		return fmt.Errorf("order %s: %w", orderID, domain.ErrOrderNotFound)
 	}
+	if order.Status == domain.StatusSentToERP || order.Status == domain.StatusShipped {
+		return fmt.Errorf("order %s is %s: %w", orderID, order.Status, domain.ErrCancellationEvaluating)
+	}
 	if err := order.Cancel(); err != nil {
 		return err
 	}

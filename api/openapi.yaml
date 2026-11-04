@@ -97,7 +97,10 @@ paths:
     post:
       tags: [Protocolo de seller externo]
       summary: Cancelamento
-      description: Responde 404 quando `marketplaceOrderId` não é o do pedido.
+      description: |
+        Responde 404 quando `marketplaceOrderId` não é o do pedido. Pedido `received` ou `authorized` é
+        cancelado na hora (200 com recibo). Pedido já enviado ao ERP ou despachado não muda: a resposta é
+        200 vazia, que no protocolo significa "em avaliação", e a nota enviada depois é a recusa.
       parameters:
         - { $ref: '#/components/parameters/SellerOrderId' }
       requestBody:
@@ -116,7 +119,7 @@ paths:
                 requestedByUser: { type: boolean }
       responses:
         '200':
-          description: Cancelamento confirmado.
+          description: Cancelamento confirmado (com recibo) ou em avaliação (corpo vazio).
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Receipt' }
