@@ -16,6 +16,7 @@ type PlaceOrderCommand struct {
 	Items          []domain.Item
 
 	MarketplaceEndpoint string
+	FreightCents        int64
 }
 
 type PlaceOrder struct {
@@ -42,6 +43,9 @@ func (uc *PlaceOrder) Execute(ctx context.Context, cmd PlaceOrderCommand) (*doma
 		return nil, err
 	}
 	order.MarketplaceEndpoint = cmd.MarketplaceEndpoint
+	if err := order.SetFreight(cmd.FreightCents); err != nil {
+		return nil, err
+	}
 	built, items := order.ID, append([]domain.Item(nil), order.Items...)
 	if err := uc.reserve(ctx, items); err != nil {
 		return nil, err

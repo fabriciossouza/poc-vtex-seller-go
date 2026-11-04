@@ -51,6 +51,9 @@ type Order struct {
 	// MarketplaceEndpoint is where the marketplace expects this order's
 	// invoice; it only arrives with the placement request.
 	MarketplaceEndpoint string
+	// FreightCents is the price of the SLA the marketplace selected; the
+	// invoice value is the items plus this freight.
+	FreightCents int64
 	// Version counts saved updates; repositories use it for optimistic locking.
 	Version int
 }
@@ -86,6 +89,19 @@ func NewOrder(id, idempotencyKey string, items []Item, now time.Time) (*Order, e
 		Status:         StatusReceived,
 		CreatedAt:      now,
 	}, nil
+}
+
+// SetFreight keeps the invoice value (items plus freight) inside int64.
+func (o *Order) SetFreight(cents int64) error {
+	var items int64
+	for _, it := range o.Items {
+		items += it.PriceCents * int64(it.Quantity)
+	}
+	if cents < 0 || cents > math.MaxInt64-items {
+		return fmt.Errorf("%w: freight %d is negative or overflows the order total", ErrInvalidOrder, cents)
+	}
+	o.FreightCents = cents
+	return nil
 }
 
 func (o *Order) Authorize() error { return o.transition(StatusAuthorized, StatusReceived) }

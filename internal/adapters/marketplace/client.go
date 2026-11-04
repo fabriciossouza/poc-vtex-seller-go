@@ -84,6 +84,7 @@ func (c *Client) NotifyInvoice(ctx context.Context, order domain.Order) error {
 		payload.Items = append(payload.Items, invoiceItem{ID: it.SKU, Quantity: it.Quantity, Price: it.PriceCents})
 		payload.InvoiceValue += it.PriceCents * int64(it.Quantity)
 	}
+	payload.InvoiceValue += order.FreightCents
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("encode invoice: %w", err)

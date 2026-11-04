@@ -139,7 +139,9 @@ func TestCancelMapsDomainErrorsToStatus(t *testing.T) {
 
 type conflictingAction struct{}
 
-func (conflictingAction) Execute(context.Context, string, string) error { return ports.ErrVersionConflict }
+func (conflictingAction) Execute(context.Context, string, string) error {
+	return ports.ErrVersionConflict
+}
 
 func TestConcurrentModificationIsReportedAsConflictSoTheMarketplaceRetries(t *testing.T) {
 	handler := httpadapter.NewHandler(httpadapter.Deps{Fulfill: conflictingAction{}, Cancel: conflictingAction{}, Clock: fixedClock{}, NewID: func() string { return "x" }})

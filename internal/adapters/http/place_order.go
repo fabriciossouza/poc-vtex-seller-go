@@ -2,6 +2,7 @@ package httpadapter
 
 import (
 	"fmt"
+	"math"
 	"net/http"
 
 	"github.com/fabriciossouza/poc-vtex-seller-go/internal/app"
@@ -19,6 +20,11 @@ type placementRequest struct {
 	MarketplaceOrderID          string       `json:"marketplaceOrderId"`
 	MarketplaceServicesEndpoint string       `json:"marketplaceServicesEndpoint"`
 	Items                       []placedItem `json:"items"`
+	ShippingData                struct {
+		LogisticsInfo []struct {
+			Price int64 `json:"price"`
+		} `json:"logisticsInfo"`
+	} `json:"shippingData"`
 }
 
 type placementResponse struct {
@@ -55,10 +61,20 @@ func (h *handler) placeOrder(w http.ResponseWriter, r *http.Request) {
 		items[i] = domain.Item{SKU: it.ID, Quantity: it.Quantity, PriceCents: it.Price}
 	}
 
+	var freight int64
+	for _, info := range req.ShippingData.LogisticsInfo {
+		if info.Price < 0 || freight > math.MaxInt64-info.Price {
+			writeError(w, http.StatusBadRequest, "invalid_request", "logisticsInfo price must be a non-negative amount that fits the order total")
+			return
+		}
+		freight += info.Price
+	}
+
 	order, err := h.Place.Execute(r.Context(), app.PlaceOrderCommand{
 		OrderID:             h.NewID(),
 		IdempotencyKey:      req.MarketplaceOrderID,
 		MarketplaceEndpoint: req.MarketplaceServicesEndpoint,
+		FreightCents:        freight,
 		Items:               items,
 	})
 	if err != nil {

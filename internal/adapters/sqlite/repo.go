@@ -29,10 +29,11 @@ CREATE TABLE IF NOT EXISTS orders (
 	tracking_code TEXT NOT NULL,
 	created_at TEXT NOT NULL,
 	marketplace_endpoint TEXT NOT NULL,
+	freight_cents INTEGER NOT NULL DEFAULT 0,
 	version INTEGER NOT NULL DEFAULT 0
 )`
 
-const columns = "id, idempotency_key, items, status, tracking_code, created_at, marketplace_endpoint, version"
+const columns = "id, idempotency_key, items, status, tracking_code, created_at, marketplace_endpoint, freight_cents, version"
 
 type Repo struct {
 	db *sql.DB
@@ -102,9 +103,9 @@ func (r *Repo) insert(ctx context.Context, order *domain.Order) error {
 	if err != nil {
 		return fmt.Errorf("encode items: %w", err)
 	}
-	_, err = r.db.ExecContext(ctx, `INSERT INTO orders (`+columns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+	_, err = r.db.ExecContext(ctx, `INSERT INTO orders (`+columns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		order.ID, order.IdempotencyKey, string(items), string(order.Status), order.TrackingCode,
-		order.CreatedAt.UTC().Format(time.RFC3339Nano), order.MarketplaceEndpoint, order.Version)
+		order.CreatedAt.UTC().Format(time.RFC3339Nano), order.MarketplaceEndpoint, order.FreightCents, order.Version)
 	if err == nil {
 		return nil
 	}
@@ -141,7 +142,7 @@ func (r *Repo) queryOne(ctx context.Context, column, value string) (*domain.Orde
 		o                      domain.Order
 		items, status, created string
 	)
-	err := row.Scan(&o.ID, &o.IdempotencyKey, &items, &status, &o.TrackingCode, &created, &o.MarketplaceEndpoint, &o.Version)
+	err := row.Scan(&o.ID, &o.IdempotencyKey, &items, &status, &o.TrackingCode, &created, &o.MarketplaceEndpoint, &o.FreightCents, &o.Version)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, domain.ErrOrderNotFound
 	}
