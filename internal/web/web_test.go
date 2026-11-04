@@ -130,3 +130,44 @@ func TestSpecTextIsWrittenWithAccents(t *testing.T) {
 		}
 	}
 }
+
+func TestSpecDocumentsTheFreightOfThePlacementAndTheTwoShapesOfTheCancelAnswer(t *testing.T) {
+	var doc struct {
+		Paths map[string]map[string]struct {
+			Description string `yaml:"description"`
+			RequestBody struct {
+				Content map[string]struct {
+					Example map[string]any `yaml:"example"`
+				} `yaml:"content"`
+			} `yaml:"requestBody"`
+		} `yaml:"paths"`
+		Components struct {
+			Schemas map[string]struct {
+				Properties map[string]struct {
+					Properties map[string]struct {
+						Items struct {
+							Properties map[string]any `yaml:"properties"`
+						} `yaml:"items"`
+					} `yaml:"properties"`
+				} `yaml:"properties"`
+			} `yaml:"schemas"`
+		} `yaml:"components"`
+	}
+	if err := yaml.Unmarshal(api.Spec, &doc); err != nil {
+		t.Fatal(err)
+	}
+
+	info := doc.Components.Schemas["PlacementRequest"].Properties["shippingData"].Properties["logisticsInfo"].Items.Properties
+	if _, ok := info["itemIndex"]; !ok {
+		t.Errorf("PlacementRequest.shippingData.logisticsInfo lacks itemIndex: %v", info)
+	}
+	if _, ok := info["price"]; !ok {
+		t.Errorf("PlacementRequest.shippingData.logisticsInfo lacks price: %v", info)
+	}
+	if _, ok := doc.Paths["/pvt/orders"]["post"].RequestBody.Content["application/json"].Example["shippingData"]; !ok {
+		t.Error("the POST /pvt/orders example lacks shippingData")
+	}
+	if d := doc.Paths["/pvt/orders/{sellerOrderId}/cancel"]["post"].Description; !strings.Contains(d, "content-type") {
+		t.Errorf("cancel description does not say the empty answer has no content-type: %q", d)
+	}
+}
