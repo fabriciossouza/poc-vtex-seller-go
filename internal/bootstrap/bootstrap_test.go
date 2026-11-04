@@ -447,3 +447,18 @@ func TestExceedingTheRateLimitAnswers429(t *testing.T) {
 		t.Fatalf("status = %d, want 429", last)
 	}
 }
+
+func TestAppServesThePanelTheDocsAndTheSpec(t *testing.T) {
+	w := start(t)
+	for path, want := range map[string]string{"/": "btn-happy", "/docs/": "swagger-ui", "/docs/openapi.yaml": "openapi: 3."} {
+		resp, err := http.Get(w.url + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || !strings.Contains(string(raw), want) {
+			t.Errorf("%s: status %d, missing %q", path, resp.StatusCode, want)
+		}
+	}
+}

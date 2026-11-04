@@ -31,6 +31,7 @@ import (
 	"github.com/fabriciossouza/poc-vtex-seller-go/internal/platform/ratelimit"
 	"github.com/fabriciossouza/poc-vtex-seller-go/internal/platform/resilience"
 	"github.com/fabriciossouza/poc-vtex-seller-go/internal/platform/worker"
+	"github.com/fabriciossouza/poc-vtex-seller-go/internal/web"
 )
 
 type Config struct {
@@ -170,6 +171,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		_, _ = io.WriteString(rw, `{"status":"ok"}`+"\n")
 	})
 	root.Handle("GET /metrics", metrics.Handler())
+	root.Handle("/", web.Handler())
 
 	limiter := ratelimit.New(cfg.RateLimitPerSecond, cfg.RateLimitBurst, time.Now)
 	var handler http.Handler = root
