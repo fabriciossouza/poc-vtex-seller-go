@@ -1,0 +1,56 @@
+{
+  "@id": "poc-vtex",
+  "match": [
+    {
+      "host": [
+        "vtex.fabriciosouza.duckdns.org"
+      ]
+    }
+  ],
+  "handle": [
+    {
+      "handler": "headers",
+      "response": {
+        "deferred": true,
+        "set": {
+          "X-Robots-Tag": [
+            "noindex, nofollow"
+          ]
+        }
+      }
+    },
+    {
+      "handler": "request_body",
+      "max_size": 1153434
+    },
+    {
+      "encodings": {
+        "gzip": {},
+        "zstd": {}
+      },
+      "handler": "encode",
+      "prefer": [
+        "zstd",
+        "gzip"
+      ]
+    },
+    {
+      "handler": "reverse_proxy",
+      "headers": {
+        "request": {
+          "set": {
+            "X-Forwarded-For": [
+              "{http.request.remote.host}"
+            ]
+          }
+        }
+      },
+      "upstreams": [
+        {
+          "dial": "127.0.0.1:8094"
+        }
+      ]
+    }
+  ],
+  "terminal": true
+}
