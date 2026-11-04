@@ -31,11 +31,12 @@ func ParseCIDRs(list string) ([]netip.Prefix, error) {
 
 // ClientIP returns the peer address, unless the peer is a trusted proxy: then
 // it walks X-Forwarded-For from the right, skipping trusted hops, and returns
-// the first valid untrusted one. Entries to its left were written by the
-// client and are never used. A chain with no usable hop yields "" when the
-// header is present but malformed, because answering with the proxy address
-// would put every such client in one shared bucket; an absent header or a
-// chain made only of trusted hops means the proxy itself is the client.
+// the first untrusted one. Entries to its left were written by the client and
+// are never used. A malformed hop met on the way yields "" (fail closed):
+// skipping it would let the client pick which hop counts, and answering with
+// the proxy address would put every such client in one shared bucket. An
+// absent header or a chain made only of trusted hops means the proxy itself
+// is the client.
 func ClientIP(r *http.Request, trusted []netip.Prefix) string {
 	ap, err := netip.ParseAddrPort(r.RemoteAddr)
 	if err != nil {
@@ -49,21 +50,16 @@ func ClientIP(r *http.Request, trusted []netip.Prefix) string {
 	if raw == "" {
 		return peer.String()
 	}
-	sawValid := false
 	for _, hop := range slices.Backward(strings.Split(raw, ",")) {
 		addr, err := netip.ParseAddr(strings.TrimSpace(hop))
 		if err != nil {
-			continue
+			return ""
 		}
-		sawValid = true
 		if addr = addr.Unmap(); !isTrusted(addr, trusted) {
 			return addr.String()
 		}
 	}
-	if sawValid {
-		return peer.String()
-	}
-	return ""
+	return peer.String()
 }
 
 func isTrusted(addr netip.Addr, trusted []netip.Prefix) bool {
@@ -72,13 +68,21 @@ func isTrusted(addr netip.Addr, trusted []netip.Prefix) bool {
 
 // IsInternal reports whether the request came straight from one of the
 // internal networks, not through the public proxy: the peer must be inside
-// nets and no forwarding header may be present (a proxy always adds one).
-func IsInternal(r *http.Request, nets []netip.Prefix) bool {
-	if r.Header.Get("X-Forwarded-For") != "" || r.Header.Get("Forwarded") != "" || r.Header.Get("X-Real-Ip") != "" {
-		return false
+// nets, must not be a trusted proxy (the bridge gateway can sit inside nets
+// and is the public path), and no forwarding header may be present, even
+// empty (a proxy always adds one).
+func IsInternal(r *http.Request, nets, trusted []netip.Prefix) bool {
+	for _, h := range []string{"X-Forwarded-For", "Forwarded", "X-Real-Ip"} {
+		if len(r.Header.Values(h)) > 0 {
+			return false
+		}
 	}
 	ap, err := netip.ParseAddrPort(r.RemoteAddr)
-	return err == nil && isTrusted(ap.Addr().Unmap(), nets)
+	if err != nil {
+		return false
+	}
+	peer := ap.Addr().Unmap()
+	return isTrusted(peer, nets) && !isTrusted(peer, trusted)
 }
 
 // limitKey groups IPv6 clients by /64, since one subscriber usually owns the
@@ -100,8 +104,10 @@ func Path(path string) Exemption {
 }
 
 // InternalPrefix exempts requests under prefix that come from internal networks.
-func InternalPrefix(prefix string, nets []netip.Prefix) Exemption {
-	return func(r *http.Request) bool { return strings.HasPrefix(r.URL.Path, prefix) && IsInternal(r, nets) }
+func InternalPrefix(prefix string, nets, trusted []netip.Prefix) Exemption {
+	return func(r *http.Request) bool {
+		return strings.HasPrefix(r.URL.Path, prefix) && IsInternal(r, nets, trusted)
+	}
 }
 
 // Middleware answers 429 once a client IP spends its budget, and 400 when a

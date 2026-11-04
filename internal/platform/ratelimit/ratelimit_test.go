@@ -175,8 +175,14 @@ func TestMiddlewareDoesNotLimitExemptPaths(t *testing.T) {
 func TestClientIPSkipsMalformedHopsAndNeverFallsBackToTheProxy(t *testing.T) {
 	trusted, _ := ratelimit.ParseCIDRs("10.0.0.0/8")
 
-	if got := ratelimit.ClientIP(request("10.0.0.2:5000", "198.51.100.9, garbage"), trusted); got != "198.51.100.9" {
+	if got := ratelimit.ClientIP(request("10.0.0.2:5000", "garbage, 198.51.100.9"), trusted); got != "198.51.100.9" {
 		t.Fatalf("ClientIP = %q, want the rightmost valid untrusted hop", got)
+	}
+	if got := ratelimit.ClientIP(request("10.0.0.2:5000", "198.51.100.9, garbage"), trusted); got != "" {
+		t.Fatalf("ClientIP = %q, want empty: a malformed hop next to the proxy fails closed", got)
+	}
+	if got := ratelimit.ClientIP(request("10.0.0.2:5000", "198.51.100.9, garbage, 10.0.0.7"), trusted); got != "" {
+		t.Fatalf("ClientIP = %q, want empty: a malformed hop behind a trusted hop fails closed", got)
 	}
 	if got := ratelimit.ClientIP(request("10.0.0.2:5000", "garbage"), trusted); got != "" {
 		t.Fatalf("ClientIP = %q, want empty: the proxy bucket is shared by everyone", got)
@@ -225,7 +231,7 @@ func TestLimiterRefusesNewKeysOnceTheMapIsFull(t *testing.T) {
 
 func TestInternalPrefixExemptsOnlyInternalPeersWithoutForwardingHeaders(t *testing.T) {
 	internal, _ := ratelimit.ParseCIDRs("172.30.0.0/24")
-	h := ratelimit.Middleware(ratelimit.New(1, 1, newClock().Now), nil, ratelimit.InternalPrefix("/demo/mkt/", internal))(okHandler())
+	h := ratelimit.Middleware(ratelimit.New(1, 1, newClock().Now), nil, ratelimit.InternalPrefix("/demo/mkt/", internal, nil))(okHandler())
 	call := func(remote, xff, path string) int {
 		r := request(remote, xff)
 		r.URL.Path = path
@@ -245,7 +251,37 @@ func TestInternalPrefixExemptsOnlyInternalPeersWithoutForwardingHeaders(t *testi
 	if code := call("172.30.0.1:1", "198.51.100.1", "/demo/mkt/pvt/orders/x/invoice"); code != http.StatusTooManyRequests {
 		t.Fatalf("a request that came through the proxy must stay limited: %d", code)
 	}
-	if !ratelimit.IsInternal(request("172.30.0.5:1", ""), internal) || ratelimit.IsInternal(request("172.30.0.5:1", "1.1.1.1"), internal) {
+	if !ratelimit.IsInternal(request("172.30.0.5:1", ""), internal, nil) || ratelimit.IsInternal(request("172.30.0.5:1", "1.1.1.1"), internal, nil) {
 		t.Fatal("IsInternal must require an internal peer and no forwarding header")
+	}
+}
+
+func TestIsInternalRejectsAnyForwardingHeaderEvenWhenEmpty(t *testing.T) {
+	internal, _ := ratelimit.ParseCIDRs("172.30.0.0/24")
+
+	for _, header := range []string{"X-Forwarded-For", "Forwarded", "X-Real-Ip"} {
+		r := request("172.30.0.5:1", "")
+		r.Header[header] = []string{""}
+		if ratelimit.IsInternal(r, internal, nil) {
+			t.Fatalf("an empty %s header must make the request non internal", header)
+		}
+	}
+	r := request("172.30.0.5:1", "")
+	r.Header.Add("X-Forwarded-For", "")
+	r.Header.Add("X-Forwarded-For", "1.1.1.1")
+	if ratelimit.IsInternal(r, internal, nil) {
+		t.Fatal("a second X-Forwarded-For line must make the request non internal")
+	}
+}
+
+func TestIsInternalNeverCountsATrustedProxyAsInternal(t *testing.T) {
+	internal, _ := ratelimit.ParseCIDRs("172.30.0.0/24,172.30.1.0/24")
+	trusted, _ := ratelimit.ParseCIDRs("172.30.0.1/32")
+
+	if ratelimit.IsInternal(request("172.30.0.1:1", ""), internal, trusted) {
+		t.Fatal("the gateway listed in TRUSTED_PROXIES is the public path, never internal")
+	}
+	if !ratelimit.IsInternal(request("172.30.1.5:1", ""), internal, trusted) {
+		t.Fatal("another peer of the internal networks stays internal")
 	}
 }
