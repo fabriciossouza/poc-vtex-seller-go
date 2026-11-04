@@ -6,6 +6,7 @@ import (
 	"context"
 	"net/http"
 	"regexp"
+	"time"
 
 	"github.com/fabriciossouza/poc-vtex-seller-go/internal/app"
 	"github.com/fabriciossouza/poc-vtex-seller-go/internal/domain"
@@ -33,6 +34,8 @@ type Deps struct {
 	// value is caller-controlled, so a nil validator refuses every placement.
 	ValidateEndpoint func(endpoint string) error
 	Clock            ports.Clock
+	// SimulationTimeout bounds one simulation; zero means 2s.
+	SimulationTimeout time.Duration
 	// NewID generates seller order ids and receipts.
 	NewID func() string
 }

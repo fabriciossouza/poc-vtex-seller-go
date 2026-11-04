@@ -76,7 +76,11 @@ func (h *handler) simulate(w http.ResponseWriter, r *http.Request) {
 		items[i] = domain.Item{SKU: it.ID, Quantity: it.Quantity}
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), simulationBudget)
+	budget := h.SimulationTimeout
+	if budget == 0 {
+		budget = simulationBudget
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), budget)
 	defer cancel()
 	sim, err := h.Simulate.Execute(ctx, items)
 	if err != nil {
