@@ -207,3 +207,17 @@ func TestFulfillAndCancelRefuseAMarketplaceOrderIDThatIsNotTheOrders(t *testing.
 		}
 	}
 }
+
+func TestRepeatedCancelAnswersWithAReceiptLikeFulfill(t *testing.T) {
+	e := newEnv(t, nil)
+	orderID := placeContractOrder(t, e)
+	body := readJSONFile(t, "cancel_request.json")
+	_, _ = e.post(t, "/pvt/orders/"+orderID+"/cancel", body)
+
+	status, got := e.post(t, "/pvt/orders/"+orderID+"/cancel", body)
+
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %v", status, got)
+	}
+	assertReceipt(t, got, "cancel_response.json", orderID)
+}

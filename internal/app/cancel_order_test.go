@@ -1,9 +1,12 @@
 package app_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/fabriciossouza/poc-vtex-seller-go/internal/app"
@@ -95,3 +98,39 @@ func TestCancelOrderDoesNotReleaseWhenTheSaveLosesTheRace(t *testing.T) {
 type conflictOnce struct{ *memRepo }
 
 func (conflictOnce) Save(context.Context, *domain.Order) error { return ports.ErrVersionConflict }
+
+func TestCancelOrderRepeatedOnACancelledOrderSucceedsWithoutReleasingTwice(t *testing.T) {
+	repo, stock := newMemRepo(), &fakeReserver{}
+	seedOrder(t, repo)
+	uc := app.NewCancelOrder(repo, stock)
+	_ = uc.Execute(context.Background(), "ord-1", "key-1")
+
+	if err := uc.Execute(context.Background(), "ord-1", "key-1"); err != nil {
+		t.Fatalf("repeated cancel: %v", err)
+	}
+	if len(stock.calls) != 1 {
+		t.Fatalf("stock calls = %v, want a single release", stock.calls)
+	}
+	if err := uc.Execute(context.Background(), "ord-1", "other"); !errors.Is(err, domain.ErrOrderNotFound) {
+		t.Fatalf("wrong marketplaceOrderId on a cancelled order: err = %v, want ErrOrderNotFound", err)
+	}
+}
+
+func TestCancelOrderLogsWhenItAnswersEvaluating(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	repo := newMemRepo()
+	seedOrder(t, repo)
+	o, _ := repo.Get(context.Background(), "ord-1")
+	_ = o.Authorize()
+	_ = o.MarkSentToERP()
+	_ = repo.Save(context.Background(), o)
+
+	_ = app.NewCancelOrder(repo, &fakeReserver{}).Execute(context.Background(), "ord-1", "key-1")
+
+	if out := logs.String(); !strings.Contains(out, "order=ord-1") || !strings.Contains(out, "status=sent_to_erp") {
+		t.Fatalf("log = %q, want the order id and status of the cancel answered as evaluating", out)
+	}
+}
