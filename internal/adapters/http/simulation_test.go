@@ -1,8 +1,15 @@
 package httpadapter_test
 
 import (
+	"context"
 	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
+
+	httpadapter "github.com/fabriciossouza/poc-vtex-seller-go/internal/adapters/http"
+	"github.com/fabriciossouza/poc-vtex-seller-go/internal/app"
+	"github.com/fabriciossouza/poc-vtex-seller-go/internal/domain"
 )
 
 func TestSimulationMatchesTheContractResponse(t *testing.T) {
@@ -70,5 +77,44 @@ func TestSimulationAcceptsStorefrontRequestWithoutAddress(t *testing.T) {
 
 	if status != http.StatusOK {
 		t.Fatalf("status = %d: country/postalCode may be absent in storefront simulations", status)
+	}
+}
+
+// slowTMS answers after d unless the request context ends first, like an HTTP
+// client calling a slow service.
+type slowTMS struct {
+	fakeTMS
+	d time.Duration
+}
+
+func (s slowTMS) QuoteShipping(ctx context.Context, items []domain.Item) (domain.ShippingSLA, error) {
+	select {
+	case <-time.After(s.d):
+		return s.fakeTMS.QuoteShipping(ctx, items)
+	case <-ctx.Done():
+		return domain.ShippingSLA{}, ctx.Err()
+	}
+}
+
+func TestSimulationAnswersBeforeTheMarketplaceTimeoutWhenTheTMSIsSlow(t *testing.T) {
+	const marketplaceTimeout = 2500 * time.Millisecond
+	handler := httpadapter.NewHandler(httpadapter.Deps{
+		Simulate: app.NewSimulateCart(fakeCatalog{}, fakeStock{map[string]int{"6": 5}}, slowTMS{d: 2700 * time.Millisecond}),
+		Clock:    fixedClock{},
+		NewID:    func() string { return "x" },
+	})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+	e := &env{srv: srv}
+
+	start := time.Now()
+	status, _ := e.post(t, "/pvt/orderForms/simulation", readJSONFile(t, "simulation_request.json"))
+	elapsed := time.Since(start)
+
+	if elapsed >= marketplaceTimeout {
+		t.Errorf("answered after %v, the marketplace gives up at %v", elapsed, marketplaceTimeout)
+	}
+	if status == http.StatusOK {
+		t.Errorf("status = %d, a simulation that missed its budget must not look successful", status)
 	}
 }
