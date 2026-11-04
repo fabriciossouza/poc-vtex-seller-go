@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/fabriciossouza/poc-vtex-seller-go/internal/domain"
+	"github.com/fabriciossouza/poc-vtex-seller-go/internal/ports"
 )
 
 type fakeCatalog struct{ prices map[string]int64 }
@@ -39,12 +40,16 @@ func (f *fakeTMS) CreateShipment(context.Context, domain.Order) (string, error) 
 }
 
 type fakeERP struct {
-	err   error
-	calls int
+	err    error
+	calls  int
+	onSend func()
 }
 
 func (f *fakeERP) SendOrder(context.Context, domain.Order) error {
 	f.calls++
+	if f.onSend != nil {
+		f.onSend()
+	}
 	return f.err
 }
 
@@ -73,7 +78,14 @@ type memRepo struct {
 
 func newMemRepo() *memRepo { return &memRepo{byID: map[string]domain.Order{}} }
 
+// Save mimics the optimistic locking of the real repository.
 func (r *memRepo) Save(_ context.Context, o *domain.Order) error {
+	if stored, ok := r.byID[o.ID]; ok {
+		if stored.Version != o.Version {
+			return ports.ErrVersionConflict
+		}
+		o.Version++
+	}
 	r.saves++
 	cp := *o
 	cp.Items = append([]domain.Item(nil), o.Items...)

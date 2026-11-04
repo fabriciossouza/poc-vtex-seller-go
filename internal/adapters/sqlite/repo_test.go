@@ -10,6 +10,7 @@ import (
 
 	"github.com/fabriciossouza/poc-vtex-seller-go/internal/adapters/sqlite"
 	"github.com/fabriciossouza/poc-vtex-seller-go/internal/domain"
+	"github.com/fabriciossouza/poc-vtex-seller-go/internal/ports"
 )
 
 var createdAt = time.Date(2026, 11, 4, 12, 0, 0, 123, time.UTC)
@@ -141,5 +142,49 @@ func TestOrdersSurviveReopeningTheDatabase(t *testing.T) {
 	defer second.Close()
 	if _, err := second.Get(context.Background(), "ord-1"); err != nil {
 		t.Fatalf("Get after reopen: %v", err)
+	}
+}
+
+func TestSaveRejectsAStaleVersionAndKeepsTheStoredOrder(t *testing.T) {
+	ctx := context.Background()
+	repo := openRepo(t)
+	_ = repo.Save(ctx, newOrder(t, "ord-1", "mkt-1"))
+	worker, _ := repo.Get(ctx, "ord-1")
+	canceller, _ := repo.Get(ctx, "ord-1")
+	_ = canceller.Cancel()
+	if err := repo.Save(ctx, canceller); err != nil {
+		t.Fatalf("first writer: %v", err)
+	}
+	_ = worker.Authorize()
+
+	err := repo.Save(ctx, worker)
+
+	if !errors.Is(err, ports.ErrVersionConflict) {
+		t.Fatalf("err = %v, want ErrVersionConflict", err)
+	}
+	got, _ := repo.Get(ctx, "ord-1")
+	if got.Status != domain.StatusCancelled {
+		t.Fatalf("status = %s: the stale write must not win", got.Status)
+	}
+}
+
+func TestSaveBumpsTheVersionSoTheSameOrderCanBeSavedAgain(t *testing.T) {
+	ctx := context.Background()
+	repo := openRepo(t)
+	order := newOrder(t, "ord-1", "mkt-1")
+	_ = repo.Save(ctx, order)
+
+	_ = order.Authorize()
+	if err := repo.Save(ctx, order); err != nil {
+		t.Fatalf("first update: %v", err)
+	}
+	_ = order.MarkSentToERP()
+	if err := repo.Save(ctx, order); err != nil {
+		t.Fatalf("second update: %v", err)
+	}
+
+	got, _ := repo.Get(ctx, "ord-1")
+	if got.Status != domain.StatusSentToERP || got.Version != 2 {
+		t.Fatalf("got status %s version %d", got.Status, got.Version)
 	}
 }

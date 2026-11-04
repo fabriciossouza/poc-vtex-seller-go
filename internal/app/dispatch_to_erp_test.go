@@ -7,6 +7,7 @@ import (
 
 	"github.com/fabriciossouza/poc-vtex-seller-go/internal/app"
 	"github.com/fabriciossouza/poc-vtex-seller-go/internal/domain"
+	"github.com/fabriciossouza/poc-vtex-seller-go/internal/ports"
 )
 
 type dispatchEnv struct {
@@ -161,5 +162,61 @@ func TestDispatchToERPUnknownOrderCallsNoPort(t *testing.T) {
 	}
 	if erp.calls != 0 || tms.shipments != 0 {
 		t.Fatalf("erp = %d, tms = %d; want 0 and 0", erp.calls, tms.shipments)
+	}
+}
+
+func TestDispatchToERPStopsWhenACancelIsConfirmedDuringTheERPCall(t *testing.T) {
+	env := newDispatchEnv(t)
+	cancel := app.NewCancelOrder(env.repo)
+	env.erp.onSend = func() {
+		if err := cancel.Execute(context.Background(), "ord-1"); err != nil {
+			t.Errorf("concurrent cancel: %v", err)
+		}
+	}
+
+	err := env.uc.Execute(context.Background(), "ord-1")
+
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if got := env.status(t); got != domain.StatusCancelled {
+		t.Fatalf("status = %s: a confirmed cancellation must not be overwritten", got)
+	}
+	if env.tms.shipments != 0 || len(env.mkt.notified) != 0 {
+		t.Fatalf("shipments = %d, notified = %v; nothing may proceed after the cancel", env.tms.shipments, env.mkt.notified)
+	}
+}
+
+func TestDispatchToERPReportsAConflictCausedByAnotherWriterSoTheCallerCanRetry(t *testing.T) {
+	env := newDispatchEnv(t)
+	env.erp.onSend = func() {
+		o, _ := env.repo.Get(context.Background(), "ord-1")
+		_ = o.MarkSentToERP()
+		_ = env.repo.Save(context.Background(), o)
+	}
+
+	err := env.uc.Execute(context.Background(), "ord-1")
+
+	if !errors.Is(err, ports.ErrVersionConflict) {
+		t.Fatalf("err = %v, want ErrVersionConflict", err)
+	}
+	env.erp.onSend = nil
+	if err := env.uc.Execute(context.Background(), "ord-1"); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if env.erp.calls != 1 || env.status(t) != domain.StatusShipped {
+		t.Fatalf("erp calls = %d, status = %s", env.erp.calls, env.status(t))
+	}
+}
+
+func TestDispatchToERPDoesNothingForACancelledOrder(t *testing.T) {
+	env := newDispatchEnv(t)
+	_ = app.NewCancelOrder(env.repo).Execute(context.Background(), "ord-1")
+
+	if err := env.uc.Execute(context.Background(), "ord-1"); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if env.erp.calls != 0 {
+		t.Fatalf("ERP calls = %d", env.erp.calls)
 	}
 }
