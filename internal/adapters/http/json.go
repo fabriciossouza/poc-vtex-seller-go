@@ -49,6 +49,8 @@ func writeDomainError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 	case errors.Is(err, domain.ErrOrderNotFound):
 		writeError(w, http.StatusNotFound, "order_not_found", "order not found")
+	case errors.Is(err, ports.ErrInsufficientStock):
+		writeError(w, http.StatusConflict, "insufficient_stock", "not enough stock to place the order")
 	case errors.Is(err, ports.ErrVersionConflict):
 		writeError(w, http.StatusConflict, "concurrent_modification", "order was modified concurrently, retry")
 	case errors.Is(err, domain.ErrInvalidTransition):

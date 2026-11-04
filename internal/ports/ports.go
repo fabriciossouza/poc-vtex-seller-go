@@ -16,6 +16,18 @@ type Stock interface {
 	Available(ctx context.Context, sku string) (int, error)
 }
 
+// ErrInsufficientStock is returned by StockReserver.Reserve when the level
+// cannot cover the quantity.
+var ErrInsufficientStock = errors.New("insufficient stock")
+
+// StockReserver takes units out of the available stock when an order is
+// placed. Release returns them when the placement did not end up creating
+// an order.
+type StockReserver interface {
+	Reserve(ctx context.Context, sku string, quantity int) error
+	Release(ctx context.Context, sku string, quantity int) error
+}
+
 type ERPPort interface {
 	SendOrder(ctx context.Context, order domain.Order) error
 }
