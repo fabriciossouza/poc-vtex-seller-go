@@ -213,8 +213,10 @@ func TestDispatchToERPDoesNothingForACancelledOrder(t *testing.T) {
 	env := newDispatchEnv(t)
 	_ = app.NewCancelOrder(env.repo, &fakeReserver{}).Execute(context.Background(), "ord-1")
 
-	if err := env.uc.Execute(context.Background(), "ord-1"); err != nil {
-		t.Fatalf("Execute: %v", err)
+	err := env.uc.Execute(context.Background(), "ord-1")
+
+	if !errors.Is(err, ports.ErrNothingDispatched) {
+		t.Fatalf("err = %v, want ErrNothingDispatched so the breaker is not fed a call that never happened", err)
 	}
 	if env.erp.calls != 0 {
 		t.Fatalf("ERP calls = %d", env.erp.calls)

@@ -660,3 +660,114 @@ type noStock struct{}
 
 func (noStock) Reserve(context.Context, string, int) error { return nil }
 func (noStock) Release(context.Context, string, int) error { return nil }
+
+type stubDispatch struct {
+	mu     sync.Mutex
+	err    error
+	active map[string]int
+	peak   map[string]int
+	enter  chan string
+	gate   chan struct{}
+}
+
+func (d *stubDispatch) Execute(_ context.Context, orderID string) error {
+	d.mu.Lock()
+	if d.active == nil {
+		d.active, d.peak = map[string]int{}, map[string]int{}
+	}
+	d.active[orderID]++
+	d.peak[orderID] = max(d.peak[orderID], d.active[orderID])
+	d.mu.Unlock()
+	if d.enter != nil {
+		d.enter <- orderID
+	}
+	if d.gate != nil {
+		<-d.gate
+	}
+	d.mu.Lock()
+	d.active[orderID]--
+	d.mu.Unlock()
+	return d.err
+}
+
+func stubWorker(t *testing.T, e *env, d worker.Dispatcher) *worker.Worker {
+	t.Helper()
+	retrier := resilience.NewRetrier(resilience.RetryConfig{MaxAttempts: 5, BaseDelay: time.Second, MaxDelay: 10 * time.Second}, e.sleeper, func() float64 { return 1 })
+	return worker.New(e.consumer, d, retrier, e.breaker)
+}
+
+func TestVersionConflictsAreRetriedButDoNotOpenTheBreaker(t *testing.T) {
+	e := newEnv(t)
+	w := stubWorker(t, e, &stubDispatch{err: ports.ErrVersionConflict})
+	e.consumer.push(e.authorized("ord-1"))
+
+	if err := w.ProcessNext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if snap := e.breaker.Snapshot(); snap.State != resilience.StateClosed || snap.ConsecutiveFailures != 0 {
+		t.Fatalf("breaker = %+v: contention in our own database says nothing about the ERP", snap)
+	}
+	if len(e.consumer.dlq) != 1 || len(e.sleeper.slept) != 4 {
+		t.Fatalf("dlq = %d, waits = %d; want the retries to run and the letter to be parked", len(e.consumer.dlq), len(e.sleeper.slept))
+	}
+}
+
+func TestARunThatCalledNothingDoesNotCloseAHalfOpenBreaker(t *testing.T) {
+	e := newEnv(t)
+	for i := 0; i < 3; i++ {
+		_ = e.breaker.Execute(func() error { return erpDown })
+	}
+	e.clock.now = e.clock.now.Add(time.Minute)
+	w := stubWorker(t, e, &stubDispatch{err: ports.ErrNothingDispatched})
+	e.consumer.push(e.authorized("ord-1"))
+
+	if err := w.ProcessNext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if st := e.breaker.Snapshot().State; st != resilience.StateHalfOpen {
+		t.Fatalf("breaker = %s, want half-open: a cancelled order proves nothing about the ERP", st)
+	}
+	if len(e.consumer.acked) != 1 || len(e.consumer.dlq) != 0 {
+		t.Fatalf("acked = %v, dlq = %v: the message is done", e.consumer.acked, e.consumer.dlq)
+	}
+}
+
+func TestProcessNextAndReplayNeverDispatchTheSameOrderInParallel(t *testing.T) {
+	e := newEnv(t)
+	d := &stubDispatch{enter: make(chan string, 4), gate: make(chan struct{})}
+	w := stubWorker(t, e, d)
+	e.consumer.push(e.authorized("ord-1"))
+	e.consumer.dlq = []ports.DeadLetter{{ID: "dl-1", Event: e.authorized("ord-1")}}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); _ = w.ProcessNext(context.Background()) }()
+	<-d.enter // the first dispatch of ord-1 is in flight
+	go func() { defer wg.Done(); _, _ = w.ReplayDLQ(context.Background()) }()
+	time.Sleep(50 * time.Millisecond) // give the replay time to (wrongly) enter
+	close(d.gate)
+	wg.Wait()
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.peak["ord-1"] != 1 {
+		t.Fatalf("peak concurrent dispatches of ord-1 = %d, want 1", d.peak["ord-1"])
+	}
+}
+
+func TestReplayStopsAtTheBatchLimitAndLeavesTheRestInTheDLQ(t *testing.T) {
+	e := newEnv(t)
+	retrier := resilience.NewRetrier(resilience.RetryConfig{MaxAttempts: 2, BaseDelay: time.Second, MaxDelay: time.Second}, e.sleeper, func() float64 { return 1 })
+	w := worker.New(e.consumer, &stubDispatch{}, retrier, e.breaker, worker.WithReplayBatch(2))
+	for _, id := range []string{"a", "b", "c", "d"} {
+		e.consumer.dlq = append(e.consumer.dlq, ports.DeadLetter{ID: "dl-" + id, Event: e.authorized("ord-" + id)})
+	}
+
+	res, err := w.ReplayDLQ(context.Background())
+
+	if err != nil || res.Replayed != 2 || len(e.consumer.dlq) != 2 {
+		t.Fatalf("res = %+v, err = %v, left = %d; want 2 replayed and 2 left", res, err, len(e.consumer.dlq))
+	}
+}

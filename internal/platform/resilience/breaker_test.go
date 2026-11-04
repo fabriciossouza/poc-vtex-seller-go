@@ -123,3 +123,51 @@ func TestBreakerResetClosesAnOpenCircuit(t *testing.T) {
 		t.Fatalf("call after Reset: %v", err)
 	}
 }
+
+func TestNeutralOutcomeNeitherResetsNorCountsFailures(t *testing.T) {
+	b := newBreaker(&fakeClock{now: time.Unix(0, 0)})
+	_ = fail(b)
+	_ = fail(b)
+
+	if err := b.Execute(func() error { return resilience.Neutral(nil) }); err != nil {
+		t.Fatalf("a neutral outcome without error returns nil, got %v", err)
+	}
+	boom := transientErr{true}
+	for i := 0; i < 5; i++ {
+		if err := b.Execute(func() error { return resilience.Neutral(boom) }); !errors.Is(err, boom) {
+			t.Fatalf("neutral error must reach the caller, got %v", err)
+		}
+	}
+
+	if snap := b.Snapshot(); snap.State != resilience.StateClosed || snap.ConsecutiveFailures != 2 {
+		t.Fatalf("snapshot = %+v, want closed with the 2 earlier failures kept", snap)
+	}
+	_ = fail(b)
+	if b.Snapshot().State != resilience.StateOpen {
+		t.Fatal("the third real failure must still open the circuit")
+	}
+}
+
+func TestNeutralOutcomeInHalfOpenKeepsTheCircuitHalfOpenAndFreesTheProbe(t *testing.T) {
+	c := &fakeClock{now: time.Unix(0, 0)}
+	b := newBreaker(c)
+	for i := 0; i < 3; i++ {
+		_ = fail(b)
+	}
+	c.Advance(11 * time.Second)
+
+	if err := b.Execute(func() error { return resilience.Neutral(nil) }); err != nil {
+		t.Fatal(err)
+	}
+	if st := b.Snapshot().State; st != resilience.StateHalfOpen {
+		t.Fatalf("state = %s: a run that called no dependency proves nothing", st)
+	}
+	probed := false
+	_ = b.Execute(func() error { probed = true; return nil })
+	if !probed {
+		t.Fatal("the probe slot must be free for a real call")
+	}
+	if b.Snapshot().State != resilience.StateClosed {
+		t.Fatal("a real successful probe closes the circuit")
+	}
+}
