@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/fabriciossouza/poc-vtex-seller-go/internal/domain"
 	"github.com/fabriciossouza/poc-vtex-seller-go/internal/platform/resilience"
@@ -29,6 +30,8 @@ type Worker struct {
 	dispatch Dispatcher
 	retrier  *resilience.Retrier
 	breaker  *resilience.Breaker
+
+	replayMu sync.Mutex
 }
 
 func New(source ports.EventConsumer, dispatch Dispatcher, retrier *resilience.Retrier, breaker *resilience.Breaker) *Worker {
@@ -72,27 +75,60 @@ func (w *Worker) ProcessNext(ctx context.Context) error {
 
 // ReplayDLQ runs every dead letter through the same retry and breaker.
 // Dispatching resumes from the order's status, so steps that already
-// succeeded are not sent again.
+// succeeded are not sent again. Replays are serialized: the DLQ is listed
+// under the lock, so a concurrent caller sees what the first one discarded.
 func (w *Worker) ReplayDLQ(ctx context.Context) (ReplayResult, error) {
+	w.replayMu.Lock()
+	defer w.replayMu.Unlock()
+
 	letters, err := w.source.DeadLetters(ctx)
 	if err != nil {
 		return ReplayResult{}, fmt.Errorf("list dead letters: %w", err)
 	}
 	var res ReplayResult
 	for _, l := range letters {
-		if _, err := w.run(ctx, l.Event.OrderID); err != nil {
-			if ctx.Err() != nil {
-				return res, ctx.Err()
-			}
-			res.Failed++
-			continue
-		}
-		if err := w.source.Discard(ctx, l.ID); err != nil {
+		outcome, err := w.replayOne(ctx, l)
+		if err != nil {
 			return res, err
 		}
-		res.Replayed++
+		switch outcome {
+		case replayed:
+			res.Replayed++
+		case discarded:
+			res.Discarded++
+		default:
+			res.Failed++
+		}
 	}
 	return res, nil
+}
+
+type replayOutcome int
+
+const (
+	kept replayOutcome = iota
+	replayed
+	discarded
+)
+
+func (w *Worker) replayOne(ctx context.Context, l ports.DeadLetter) (replayOutcome, error) {
+	outcome := replayed
+	if l.Event.Type != domain.EventOrderAuthorized || l.Event.OrderID == "" {
+		outcome = discarded
+	} else if _, err := w.run(ctx, l.Event.OrderID); err != nil {
+		switch {
+		case ctx.Err() != nil:
+			return kept, ctx.Err()
+		case errors.Is(err, domain.ErrOrderNotFound), errors.Is(err, domain.ErrInvalidTransition):
+			outcome = discarded
+		default:
+			return kept, nil
+		}
+	}
+	if err := w.source.Discard(ctx, l.ID); err != nil {
+		return kept, err
+	}
+	return outcome, nil
 }
 
 type runError struct {
