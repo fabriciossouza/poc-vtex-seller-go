@@ -1,0 +1,20 @@
+{
+  "type": "Output",
+  "issuanceDate": "2026-11-05T10:00:00-03:00",
+  "invoiceNumber": "NFe-00002",
+  "invoiceValue": "3598",
+  "invoiceKey": "35261100000000000000550010000000021000000021",
+  "invoiceUrl": "https://seller-exemplo.example.com/invoices/2.pdf",
+  "courier": "courier-exemplo",
+  "trackingNumber": "12345678abc",
+  "trackingUrl": "https://courier-exemplo.example.com/tracking",
+  "dispatchedDate": "2026-11-05T13:16:13.4617653+00:00",
+  "items": [
+    {
+      "id": "6",
+      "price": 2499,
+      "description": "SKU de teste",
+      "quantity": 1
+    }
+  ]
+}

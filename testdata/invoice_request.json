@@ -1,0 +1,16 @@
+{
+  "type": "Output",
+  "invoiceNumber": "NFe-00002",
+  "courier": "courier-exemplo",
+  "trackingNumber": "12345678abc",
+  "trackingUrl": "https://courier-exemplo.example.com/tracking",
+  "items": [
+    {
+      "id": "6",
+      "quantity": 1,
+      "price": 2499
+    }
+  ],
+  "issuanceDate": "2026-11-05T10:00:00",
+  "invoiceValue": 3598
+}

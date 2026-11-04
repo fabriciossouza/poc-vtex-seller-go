@@ -1,0 +1,47 @@
+{
+  "country": "BRA",
+  "postalCode": "22270030",
+  "allowMultipleDeliveries": true,
+  "items": [
+    {
+      "id": "6",
+      "requestIndex": 0,
+      "quantity": 1,
+      "seller": "01",
+      "merchantName": "seller-exemplo",
+      "price": 2499,
+      "listPrice": 2999,
+      "measurementUnit": "un",
+      "unitMultiplier": 1,
+      "priceValidUntil": "2026-12-01T22:58:28.143",
+      "priceTags": [],
+      "offerings": []
+    }
+  ],
+  "logisticsInfo": [
+    {
+      "itemIndex": 0,
+      "quantity": 1,
+      "shipsTo": [
+        "BRA"
+      ],
+      "stockBalance": 199,
+      "slas": [
+        {
+          "id": "Express",
+          "deliveryChannel": "delivery",
+          "name": "Express",
+          "shippingEstimate": "7d",
+          "price": 1099,
+          "availableDeliveryWindows": []
+        }
+      ],
+      "deliveryChannels": [
+        {
+          "id": "delivery",
+          "stockBalance": 199
+        }
+      ]
+    }
+  ]
+}

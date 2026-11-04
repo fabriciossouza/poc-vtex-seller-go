@@ -1,0 +1,83 @@
+{
+  "marketplaceOrderId": "1138342255777-01",
+  "orderId": "959311095",
+  "followUpEmail": "seller@example.com",
+  "items": [
+    {
+      "id": "6",
+      "quantity": 1,
+      "seller": "01",
+      "commission": 0,
+      "freightCommission": 0,
+      "price": 2499,
+      "bundleItems": [],
+      "itemsAttachment": [],
+      "attachments": [],
+      "priceTags": [],
+      "measurementUnit": "un",
+      "unitMultiplier": 1,
+      "isGift": false,
+      "itemAttachment": {
+        "name": null,
+        "content": {}
+      }
+    }
+  ],
+  "clientProfileData": {
+    "email": "cliente@example.com",
+    "firstName": "Maria",
+    "lastName": "Teste",
+    "documentType": "cpf",
+    "document": "00000000191",
+    "phone": "+5521999990000",
+    "corporateName": null,
+    "tradeName": null,
+    "corporateDocument": null,
+    "stateInscription": null,
+    "corporatePhone": null,
+    "isCorporate": false,
+    "userProfileId": null
+  },
+  "shippingData": {
+    "address": {
+      "addressType": "residential",
+      "receiverName": "Maria Teste",
+      "addressId": "Home",
+      "postalCode": "22270-030",
+      "city": "Rio de Janeiro",
+      "state": "RJ",
+      "country": "BRA",
+      "street": "Rua Exemplo",
+      "number": "300",
+      "neighborhood": "Botafogo",
+      "complement": "Apto 301",
+      "reference": "Predio cinza",
+      "geoCoordinates": [
+        "-43.1729",
+        "-22.9443"
+      ]
+    },
+    "logisticsInfo": [
+      {
+        "itemIndex": 0,
+        "selectedSla": "Express",
+        "lockTTL": "8d",
+        "shippingEstimate": "7d",
+        "price": 1099
+      }
+    ]
+  },
+  "customData": {
+    "openTextField": null,
+    "marketingData": {
+      "utmSource": "teste",
+      "utmMedium": "cpc",
+      "utmCampaign": "poc",
+      "utmiPage": "_",
+      "utmiPart": "_",
+      "utmiCampaign": "_"
+    }
+  },
+  "paymentData": null,
+  "allowMultipleDeliveries": true
+}

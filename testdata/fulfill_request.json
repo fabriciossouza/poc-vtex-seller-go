@@ -1,0 +1,29 @@
+{
+  "marketplaceOrderId": "1138342255777-01",
+  "marketplaceOrderGroup": "1138342255777",
+  "paymentData": {
+    "payments": [
+      {
+        "paymentSystem": "2",
+        "paymentSystemName": "Visa",
+        "value": 3598,
+        "installments": 1,
+        "referenceValue": 3598,
+        "group": "creditCard"
+      }
+    ],
+    "connectorResponses": {
+      "Message": "Processing Payment",
+      "tid": "2212318890",
+      "authorizationId": "333333",
+      "status": "Approved",
+      "ReturnCode": "6205",
+      "nsu": "1234567891111110",
+      "code": "2000",
+      "message": "Transaction approved",
+      "acquirer": "Visa",
+      "authId": "769670",
+      "paymentId": "1138342255777"
+    }
+  }
+}
