@@ -1,6 +1,7 @@
 package resilience
 
 import (
+	"errors"
 	"sync"
 	"time"
 )
@@ -49,8 +50,20 @@ func (b *Breaker) Execute(fn func() error) error {
 		return err
 	}
 	err := fn()
+	var n *neutral
+	if errors.As(err, &n) {
+		b.release()
+		return n.err
+	}
 	b.record(IsTransient(err))
 	return err
+}
+
+// release frees the probe slot without recording an outcome.
+func (b *Breaker) release() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.probing = false
 }
 
 func (b *Breaker) Snapshot() Snapshot {

@@ -1,6 +1,9 @@
 package ports
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 // StatusError is returned by HTTP adapters when a dependency answers with a
 // non-success status. Only server errors are transient: a 4xx means the
@@ -26,3 +29,8 @@ func (versionConflict) Transient() bool { return true }
 // ErrVersionConflict is returned by OrderRepo.Save when the order changed
 // since it was read.
 var ErrVersionConflict error = versionConflict{}
+
+// ErrNothingDispatched is returned by a dispatch that made no call to any
+// external dependency, such as one for an order already cancelled. It is not
+// a failure, but it also proves nothing about the health of the dependencies.
+var ErrNothingDispatched = errors.New("nothing was dispatched")

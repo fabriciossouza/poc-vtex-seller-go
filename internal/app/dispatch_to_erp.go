@@ -57,7 +57,7 @@ func (uc *DispatchToERP) run(ctx context.Context, orderID string) error {
 		}
 		return nil
 	case domain.StatusCancelled:
-		return errCancelled
+		return fmt.Errorf("order %s: %w", order.ID, ports.ErrNothingDispatched)
 	default:
 		return &domain.TransitionError{From: order.Status, To: domain.StatusSentToERP}
 	}

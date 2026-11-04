@@ -37,7 +37,9 @@ type Worker struct {
 	backoffBase  time.Duration
 	backoffLimit time.Duration
 
-	replayMu sync.Mutex
+	replayMu    sync.Mutex
+	replayBatch int
+	orders      keyedLock
 }
 
 type Option func(*Worker)
@@ -46,6 +48,10 @@ type Option func(*Worker)
 func WithBackoff(s resilience.Sleeper, base, limit time.Duration) Option {
 	return func(w *Worker) { w.sleeper, w.backoffBase, w.backoffLimit = s, base, limit }
 }
+
+// WithReplayBatch caps how many dead letters one ReplayDLQ call handles, so a
+// large DLQ cannot outlive the HTTP request that asked for the replay.
+func WithReplayBatch(n int) Option { return func(w *Worker) { w.replayBatch = n } }
 
 func New(source ports.EventConsumer, dispatch Dispatcher, retrier *resilience.Retrier, breaker *resilience.Breaker, opts ...Option) *Worker {
 	w := &Worker{
@@ -119,7 +125,10 @@ func (w *Worker) ReplayDLQ(ctx context.Context) (ReplayResult, error) {
 		return ReplayResult{}, fmt.Errorf("list dead letters: %w", err)
 	}
 	var res ReplayResult
-	for _, l := range letters {
+	for i, l := range letters {
+		if w.replayBatch > 0 && i >= w.replayBatch {
+			break
+		}
 		outcome, err := w.replayOne(ctx, l)
 		if err != nil {
 			return res, err
@@ -172,14 +181,25 @@ type runError struct {
 func (e *runError) Error() string { return reasonOf(e) }
 func (e *runError) Unwrap() error { return e.err }
 
+// run holds the order's lock for the whole retry loop, so the consumer and a
+// replay never dispatch the same order at the same time.
 func (w *Worker) run(ctx context.Context, orderID string) (int, error) {
+	unlock := w.orders.lock(orderID)
+	defer unlock()
 	var lastFailure error
 	attempts, err := w.retrier.Do(ctx, func(ctx context.Context) error {
 		return w.breaker.Execute(func() error {
 			err := w.dispatch.Execute(ctx, orderID)
-			if err != nil {
+			switch {
+			case err == nil:
+				return nil
+			case errors.Is(err, ports.ErrNothingDispatched):
+				return resilience.Neutral(nil)
+			case errors.Is(err, ports.ErrVersionConflict):
 				lastFailure = err
+				return resilience.Neutral(err)
 			}
+			lastFailure = err
 			return err
 		})
 	})
