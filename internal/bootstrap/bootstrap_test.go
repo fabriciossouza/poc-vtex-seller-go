@@ -705,3 +705,19 @@ func TestInternalInvoiceCallbackIsNotRateLimited(t *testing.T) {
 		t.Fatalf("internal callback: status = %d, want 200 even with the budget spent", code)
 	}
 }
+
+func TestInvoiceValueInTheTimelineIncludesTheFreightFromTheSimulation(t *testing.T) {
+	w := start(t)
+	w.place("FREIGHT-1")
+	w.fulfill("FREIGHT-1")
+
+	w.eventually("invoice received", func() bool {
+		o := w.orderState("FREIGHT-1")
+		return o != nil && strings.Contains(sources(o), "marketplace recebeu a nota")
+	})
+
+	// 2 x R$ 24,99 of items plus the R$ 10,99 freight the TMS quoted.
+	if got := sources(w.orderState("FREIGHT-1")); !strings.Contains(got, "valor R$ 60,97") {
+		t.Fatalf("timeline lacks the invoice value with freight:\n%s", got)
+	}
+}
