@@ -158,13 +158,18 @@ Isto não está implementado neste repositório; é o plano que seria seguido.
 - O SLA de entrega é fixo (cotação do TMS mock com prazo constante).
 - Reset, derrubar o ERP e cancelar pedidos afetam todos os visitantes ao mesmo tempo; a demo é compartilhada e não há isolamento por sessão.
 - O `price` do placement não é conferido com o catálogo do seller; o valor enviado pelo marketplace é gravado como veio.
-- Com o breaker aberto, o worker não tenta o ERP e manda as mensagens novas direto para a DLQ com o motivo. É o comportamento mostrado no cenário 2, e o reprocessamento depende de o breaker voltar a testar.
+- Com o breaker aberto, o worker não tenta o ERP e manda as mensagens novas direto para a DLQ com o motivo. É o comportamento mostrado no cenário 2, e o reprocessamento depende de o breaker voltar a testar. Em produção, o consumo pararia enquanto o breaker estivesse aberto (as mensagens ficam na fila, sem gastar tentativas) e haveria um breaker por dependência.
 - `/metrics` é público nesta demo, sem autenticação. Os rótulos têm cardinalidade limitada e as métricas não trazem dados de pedido.
-- Os endpoints `/pvt` não têm autenticação nesta demo. Em produção, o marketplace se autenticaria (por exemplo com as chaves da VTEX) e a rede restringiria a origem.
+- Os endpoints `/pvt` não têm autenticação (`appKey` e `appToken` da VTEX) de propósito, para quem avalia poder testar pelo `/docs`. Em produção, um middleware conferiria as duas chaves com comparação em tempo constante e a rede restringiria a origem.
+- `/demo/reset` é público, e qualquer visitante limpa a demo de todos. Há reset automático a cada hora. Em produção, a rota não seria exposta.
+- O consumidor da fila tem nome fixo (`seller-1`) e o worker processa um evento por vez. Em produção, cada instância teria o seu nome no consumer group e haveria N consumidores em paralelo, apoiados na versão otimista do pedido e em adaptadores idempotentes (ERP e TMS repetem a mesma chamada sem duplicar).
+- Cancelamento: em `received` e `authorized` o seller cancela na hora e responde com recibo. Com o pedido já no ERP (`sent_to_erp`) ou despachado, nada muda e o estoque não é liberado: a resposta é `200` com corpo vazio, que no protocolo significa "em avaliação", e a nota enviada depois é a recusa. Janela que continua aberta: se o cancelamento chega com o pedido ainda `authorized` enquanto o worker está na chamada ao ERP, o cancelamento vence, o estoque volta e o worker para, mas o ERP já recebeu o pedido e não há compensação para avisá-lo. O TMS não é afetado, porque só é chamado depois de `sent_to_erp` gravado. Em produção, haveria uma chamada de cancelamento ao ERP e um fluxo de compensação.
+- A simulação tem orçamento total de 2 s (`context.WithTimeout` no handler), abaixo dos 2,5 s que o marketplace espera. Se o TMS demorar mais, o seller responde erro dentro do prazo, sem resposta degradada nem cache.
+- A nota (`invoiceValue`) soma os itens e o frete do SLA escolhido no placement (`shippingData.logisticsInfo[].price`, somados). Courier e `trackingUrl` não são enviados.
 - Existe um único circuit breaker para todas as dependências (ERP, TMS e notificação ao marketplace). Uma dependência lenta abre o breaker para as outras.
 - A nota é reenviada quando o evento é reentregue; o marketplace responde 409 e o seller trata como sucesso.
 - Não há outbox: a gravação do pedido e a publicação do evento não são atômicas. Se a publicação falhar depois do commit, o `fulfill` repetido republica o evento, mas não há varredura automática.
-- OpenTelemetry não foi implementado. A observabilidade se limita a logs JSON, `/metrics` e `/healthz`; não há traces.
+- OpenTelemetry não foi implementado. A observabilidade se limita a logs JSON, `/metrics` e `/healthz`; não há traces. Em produção, o `traceparent` recebido da VTEX seria propagado pelo HTTP e gravado como campo do evento no stream, o worker abriria spans a partir dele e um exportador OTLP enviaria tudo a um coletor.
 - Um reset concorrente com um despacho em andamento pode deixar uma carta órfã na DLQ.
 - O estado (sqlite e Redis) fica em tmpfs e se perde ao reiniciar os contêineres.
 
