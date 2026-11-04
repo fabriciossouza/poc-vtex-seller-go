@@ -71,7 +71,7 @@ func TestFulfillRejectsABodyWithoutMarketplaceOrderID(t *testing.T) {
 	}
 }
 
-func TestFulfillMapsDomainErrorsToStatus(t *testing.T) {
+func TestFulfillMapsErrorsToStatusAndRepeatedFulfillSucceeds(t *testing.T) {
 	e := newEnv(t, nil)
 	orderID := placeContractOrder(t, e)
 	body := `{"marketplaceOrderId":"1138342255777-01"}`
@@ -80,11 +80,11 @@ func TestFulfillMapsDomainErrorsToStatus(t *testing.T) {
 	if status, _ := e.post(t, "/pvt/orders/nope/fulfill", body); status != http.StatusNotFound {
 		t.Errorf("unknown order: status = %d, want 404", status)
 	}
-	if status, _ := e.post(t, "/pvt/orders/"+orderID+"/fulfill", body); status != http.StatusConflict {
-		t.Errorf("second fulfill: status = %d, want 409", status)
+	if status, _ := e.post(t, "/pvt/orders/"+orderID+"/fulfill", body); status != http.StatusOK {
+		t.Errorf("repeated fulfill: status = %d, want 200", status)
 	}
-	if len(e.bus.events) != 1 {
-		t.Errorf("events = %d, want 1", len(e.bus.events))
+	if len(e.bus.events) != 2 {
+		t.Errorf("events = %d, want 2", len(e.bus.events))
 	}
 }
 
