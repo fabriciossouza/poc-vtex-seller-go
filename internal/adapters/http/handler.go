@@ -37,6 +37,7 @@ func NewHandler(d Deps) http.Handler {
 	h := &handler{Deps: d}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /pvt/orderForms/simulation", h.simulate)
+	mux.HandleFunc("POST /pvt/orders", h.placeOrder)
 	return mux
 }
 
