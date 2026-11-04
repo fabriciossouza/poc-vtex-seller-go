@@ -98,7 +98,7 @@ func TestClientIPUsesTheRightmostUntrustedHopBehindATrustedProxy(t *testing.T) {
 func TestClientIPFallsBackToThePeerWhenForwardedForIsUnusable(t *testing.T) {
 	trusted, _ := ratelimit.ParseCIDRs("10.0.0.0/8")
 
-	for _, xff := range []string{"", "garbage", "10.0.0.9"} {
+	for _, xff := range []string{"", "10.0.0.9"} {
 		if got := ratelimit.ClientIP(request("10.0.0.2:5000", xff), trusted); got != "10.0.0.2" {
 			t.Fatalf("xff %q: ClientIP = %s, want the peer", xff, got)
 		}
@@ -161,7 +161,7 @@ func TestMiddlewareKeysByTheForwardedClientWhenThePeerIsATrustedProxy(t *testing
 }
 
 func TestMiddlewareDoesNotLimitExemptPaths(t *testing.T) {
-	h := ratelimit.Middleware(ratelimit.New(1, 1, newClock().Now), nil, "/healthz")(okHandler())
+	h := ratelimit.Middleware(ratelimit.New(1, 1, newClock().Now), nil, ratelimit.Path("/healthz"))(okHandler())
 
 	for i := 0; i < 5; i++ {
 		r := request("203.0.113.7:1", "")
@@ -169,5 +169,83 @@ func TestMiddlewareDoesNotLimitExemptPaths(t *testing.T) {
 		if rec := serve(h, r); rec.Code != http.StatusOK {
 			t.Fatalf("healthz request %d: %d", i+1, rec.Code)
 		}
+	}
+}
+
+func TestClientIPSkipsMalformedHopsAndNeverFallsBackToTheProxy(t *testing.T) {
+	trusted, _ := ratelimit.ParseCIDRs("10.0.0.0/8")
+
+	if got := ratelimit.ClientIP(request("10.0.0.2:5000", "198.51.100.9, garbage"), trusted); got != "198.51.100.9" {
+		t.Fatalf("ClientIP = %q, want the rightmost valid untrusted hop", got)
+	}
+	if got := ratelimit.ClientIP(request("10.0.0.2:5000", "garbage"), trusted); got != "" {
+		t.Fatalf("ClientIP = %q, want empty: the proxy bucket is shared by everyone", got)
+	}
+}
+
+func TestMiddlewareAnswers400WhenTheTrustedProxySentOnlyGarbageAndSpendsNoBudget(t *testing.T) {
+	trusted, _ := ratelimit.ParseCIDRs("10.0.0.0/8")
+	h := ratelimit.Middleware(ratelimit.New(1, 1, newClock().Now), trusted)(okHandler())
+
+	for i := 0; i < 3; i++ {
+		if rec := serve(h, request("10.0.0.2:1", "garbage")); rec.Code != http.StatusBadRequest {
+			t.Fatalf("garbage XFF: status %d, want 400", rec.Code)
+		}
+	}
+	if rec := serve(h, request("10.0.0.2:1", "")); rec.Code != http.StatusOK {
+		t.Fatalf("the proxy itself was limited: %d", rec.Code)
+	}
+}
+
+func TestIPv6ClientsShareTheirSlash64Bucket(t *testing.T) {
+	h := ratelimit.Middleware(ratelimit.New(1, 1, newClock().Now), nil)(okHandler())
+
+	first := serve(h, request("[2001:db8:1:2::1]:1", "")).Code
+	sameNet := serve(h, request("[2001:db8:1:2:ffff::9]:1", "")).Code
+	otherNet := serve(h, request("[2001:db8:1:3::1]:1", "")).Code
+
+	if first != http.StatusOK || sameNet != http.StatusTooManyRequests || otherNet != http.StatusOK {
+		t.Fatalf("first = %d, sameNet = %d, otherNet = %d; want 200, 429, 200", first, sameNet, otherNet)
+	}
+}
+
+func TestLimiterRefusesNewKeysOnceTheMapIsFull(t *testing.T) {
+	l := ratelimit.New(1, 5, newClock().Now, ratelimit.WithMaxKeys(2))
+
+	if !l.Allow("a") || !l.Allow("b") {
+		t.Fatal("the first two keys must fit")
+	}
+	if l.Allow("c") {
+		t.Fatal("a third key must not grow the map")
+	}
+	if !l.Allow("a") {
+		t.Fatal("a known key keeps its bucket")
+	}
+}
+
+func TestInternalPrefixExemptsOnlyInternalPeersWithoutForwardingHeaders(t *testing.T) {
+	internal, _ := ratelimit.ParseCIDRs("172.30.0.0/24")
+	h := ratelimit.Middleware(ratelimit.New(1, 1, newClock().Now), nil, ratelimit.InternalPrefix("/demo/mkt/", internal))(okHandler())
+	call := func(remote, xff, path string) int {
+		r := request(remote, xff)
+		r.URL.Path = path
+		return serve(h, r).Code
+	}
+
+	for i := 0; i < 4; i++ {
+		if code := call("172.30.0.5:1", "", "/demo/mkt/pvt/orders/x/invoice"); code != http.StatusOK {
+			t.Fatalf("internal callback %d: %d", i+1, code)
+		}
+	}
+	call("203.0.113.7:1", "", "/demo/mkt/pvt/orders/x/invoice")
+	if code := call("203.0.113.7:1", "", "/demo/mkt/pvt/orders/x/invoice"); code != http.StatusTooManyRequests {
+		t.Fatalf("an external caller must stay limited: %d", code)
+	}
+	call("172.30.0.1:1", "198.51.100.1", "/demo/mkt/pvt/orders/x/invoice")
+	if code := call("172.30.0.1:1", "198.51.100.1", "/demo/mkt/pvt/orders/x/invoice"); code != http.StatusTooManyRequests {
+		t.Fatalf("a request that came through the proxy must stay limited: %d", code)
+	}
+	if !ratelimit.IsInternal(request("172.30.0.5:1", ""), internal) || ratelimit.IsInternal(request("172.30.0.5:1", "1.1.1.1"), internal) {
+		t.Fatal("IsInternal must require an internal peer and no forwarding header")
 	}
 }
