@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -78,7 +79,8 @@ func TestSendOrderReportsConnectionFailures(t *testing.T) {
 
 	err := sapadapter.New(url, nil).SendOrder(context.Background(), order)
 
-	if err == nil {
-		t.Fatal("want connection error")
+	var netErr net.Error
+	if !errors.As(err, &netErr) {
+		t.Fatalf("err = %v, want a net.Error so the caller can retry", err)
 	}
 }
