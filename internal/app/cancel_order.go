@@ -26,7 +26,13 @@ func (uc *CancelOrder) Execute(ctx context.Context, orderID, marketplaceOrderID 
 	if order.IdempotencyKey != marketplaceOrderID {
 		return fmt.Errorf("order %s: %w", orderID, domain.ErrOrderNotFound)
 	}
+	if order.Status == domain.StatusCancelled {
+		// A repeated cancel is the same answer, like a repeated fulfill; the
+		// stock was released by the call that saved the cancellation.
+		return nil
+	}
 	if order.Status == domain.StatusSentToERP || order.Status == domain.StatusShipped {
+		slog.Info("cancel: answered as under evaluation", "order", orderID, "status", order.Status)
 		return fmt.Errorf("order %s is %s: %w", orderID, order.Status, domain.ErrCancellationEvaluating)
 	}
 	if err := order.Cancel(); err != nil {
