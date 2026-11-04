@@ -21,7 +21,7 @@ type OrderPlacer interface {
 }
 
 type OrderAction interface {
-	Execute(ctx context.Context, orderID string) error
+	Execute(ctx context.Context, orderID, marketplaceOrderID string) error
 }
 
 type Deps struct {

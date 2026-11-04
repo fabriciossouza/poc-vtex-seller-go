@@ -22,7 +22,7 @@ func newDispatchEnv(t *testing.T) dispatchEnv {
 	t.Helper()
 	repo := newMemRepo()
 	seedOrder(t, repo)
-	if err := app.NewFulfillOrder(repo, &fakeBus{}).Execute(context.Background(), "ord-1"); err != nil {
+	if err := app.NewFulfillOrder(repo, &fakeBus{}).Execute(context.Background(), "ord-1", "key-1"); err != nil {
 		t.Fatal(err)
 	}
 	env := dispatchEnv{repo: repo, erp: &fakeERP{}, tms: &fakeTMS{tracking: "TRK-1"}, mkt: &fakeMarketplace{}}
@@ -169,7 +169,7 @@ func TestDispatchToERPStopsWhenACancelIsConfirmedDuringTheERPCall(t *testing.T) 
 	env := newDispatchEnv(t)
 	cancel := app.NewCancelOrder(env.repo, &fakeReserver{})
 	env.erp.onSend = func() {
-		if err := cancel.Execute(context.Background(), "ord-1"); err != nil {
+		if err := cancel.Execute(context.Background(), "ord-1", "key-1"); err != nil {
 			t.Errorf("concurrent cancel: %v", err)
 		}
 	}
@@ -211,7 +211,7 @@ func TestDispatchToERPReportsAConflictCausedByAnotherWriterSoTheCallerCanRetry(t
 
 func TestDispatchToERPDoesNothingForACancelledOrder(t *testing.T) {
 	env := newDispatchEnv(t)
-	_ = app.NewCancelOrder(env.repo, &fakeReserver{}).Execute(context.Background(), "ord-1")
+	_ = app.NewCancelOrder(env.repo, &fakeReserver{}).Execute(context.Background(), "ord-1", "key-1")
 
 	err := env.uc.Execute(context.Background(), "ord-1")
 

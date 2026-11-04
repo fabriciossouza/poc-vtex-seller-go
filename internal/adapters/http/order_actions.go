@@ -52,7 +52,7 @@ func (h *handler) cancel(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) act(w http.ResponseWriter, r *http.Request, action OrderAction, marketplaceOrderID string) {
 	orderID := r.PathValue("sellerOrderId")
-	if err := action.Execute(r.Context(), orderID); err != nil {
+	if err := action.Execute(r.Context(), orderID, marketplaceOrderID); err != nil {
 		writeDomainError(w, err)
 		return
 	}

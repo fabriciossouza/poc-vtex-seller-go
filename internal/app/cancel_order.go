@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/fabriciossouza/poc-vtex-seller-go/internal/domain"
 	"github.com/fabriciossouza/poc-vtex-seller-go/internal/ports"
 )
 
@@ -17,10 +18,13 @@ func NewCancelOrder(repo ports.OrderRepo, stock ports.StockReserver) *CancelOrde
 	return &CancelOrder{repo: repo, stock: stock}
 }
 
-func (uc *CancelOrder) Execute(ctx context.Context, orderID string) error {
+func (uc *CancelOrder) Execute(ctx context.Context, orderID, marketplaceOrderID string) error {
 	order, err := uc.repo.Get(ctx, orderID)
 	if err != nil {
 		return fmt.Errorf("get order %s: %w", orderID, err)
+	}
+	if order.IdempotencyKey != marketplaceOrderID {
+		return fmt.Errorf("order %s: %w", orderID, domain.ErrOrderNotFound)
 	}
 	if err := order.Cancel(); err != nil {
 		return err

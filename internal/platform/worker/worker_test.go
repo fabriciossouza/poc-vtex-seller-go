@@ -523,7 +523,7 @@ func TestReplayDiscardsLettersThatCanNeverSucceedAndKeepsTheRest(t *testing.T) {
 
 func TestReplayTreatsALetterOfACancelledOrderAsDone(t *testing.T) {
 	e := newEnv(t)
-	_ = app.NewCancelOrder(e.repo, noStock{}).Execute(context.Background(), "ord-1")
+	_ = app.NewCancelOrder(e.repo, noStock{}).Execute(context.Background(), "ord-1", "mkt-1")
 	e.consumer.dlq = []ports.DeadLetter{{ID: "dl-1", Event: e.authorized("ord-1")}}
 
 	res, err := e.worker.ReplayDLQ(context.Background())

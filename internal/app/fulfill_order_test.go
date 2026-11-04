@@ -25,7 +25,7 @@ func TestFulfillOrderAuthorizesAndPublishesEvent(t *testing.T) {
 	seedOrder(t, repo)
 	uc := app.NewFulfillOrder(repo, bus)
 
-	if err := uc.Execute(context.Background(), "ord-1"); err != nil {
+	if err := uc.Execute(context.Background(), "ord-1", "key-1"); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 
@@ -43,12 +43,12 @@ func TestFulfillOrderRetryAfterPublishFailureStillPublishes(t *testing.T) {
 	repo, bus := newMemRepo(), &fakeBus{err: errors.New("redis down")}
 	seedOrder(t, repo)
 	uc := app.NewFulfillOrder(repo, bus)
-	if err := uc.Execute(context.Background(), "ord-1"); err == nil {
+	if err := uc.Execute(context.Background(), "ord-1", "key-1"); err == nil {
 		t.Fatal("first call must report the publish failure")
 	}
 	bus.err = nil
 
-	if err := uc.Execute(context.Background(), "ord-1"); err != nil {
+	if err := uc.Execute(context.Background(), "ord-1", "key-1"); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
 
@@ -62,9 +62,9 @@ func TestFulfillOrderOfAnAlreadyAuthorizedOrderSucceedsAndRepublishes(t *testing
 	repo, bus := newMemRepo(), &fakeBus{}
 	seedOrder(t, repo)
 	uc := app.NewFulfillOrder(repo, bus)
-	_ = uc.Execute(context.Background(), "ord-1")
+	_ = uc.Execute(context.Background(), "ord-1", "key-1")
 
-	if err := uc.Execute(context.Background(), "ord-1"); err != nil {
+	if err := uc.Execute(context.Background(), "ord-1", "key-1"); err != nil {
 		t.Fatalf("second call: %v", err)
 	}
 
@@ -86,7 +86,7 @@ func TestFulfillOrderOfAnOrderAlreadyBeyondAuthorizedSucceedsWithoutEvent(t *tes
 			advance(o)
 			_ = repo.Save(context.Background(), o)
 
-			if err := app.NewFulfillOrder(repo, bus).Execute(context.Background(), "ord-1"); err != nil {
+			if err := app.NewFulfillOrder(repo, bus).Execute(context.Background(), "ord-1", "key-1"); err != nil {
 				t.Fatalf("Execute: %v", err)
 			}
 			if len(bus.events) != 0 {
@@ -99,9 +99,9 @@ func TestFulfillOrderOfAnOrderAlreadyBeyondAuthorizedSucceedsWithoutEvent(t *tes
 func TestFulfillOrderRefusesACancelledOrder(t *testing.T) {
 	repo, bus := newMemRepo(), &fakeBus{}
 	seedOrder(t, repo)
-	_ = app.NewCancelOrder(repo, &fakeReserver{}).Execute(context.Background(), "ord-1")
+	_ = app.NewCancelOrder(repo, &fakeReserver{}).Execute(context.Background(), "ord-1", "key-1")
 
-	err := app.NewFulfillOrder(repo, bus).Execute(context.Background(), "ord-1")
+	err := app.NewFulfillOrder(repo, bus).Execute(context.Background(), "ord-1", "key-1")
 
 	if !errors.Is(err, domain.ErrInvalidTransition) || len(bus.events) != 0 {
 		t.Fatalf("err = %v, events = %+v", err, bus.events)
@@ -109,7 +109,7 @@ func TestFulfillOrderRefusesACancelledOrder(t *testing.T) {
 }
 
 func TestFulfillOrderUnknownOrder(t *testing.T) {
-	err := app.NewFulfillOrder(newMemRepo(), &fakeBus{}).Execute(context.Background(), "nope")
+	err := app.NewFulfillOrder(newMemRepo(), &fakeBus{}).Execute(context.Background(), "nope", "key-1")
 	if !errors.Is(err, domain.ErrOrderNotFound) {
 		t.Fatalf("err = %v", err)
 	}

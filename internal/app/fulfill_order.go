@@ -19,10 +19,13 @@ func NewFulfillOrder(repo ports.OrderRepo, bus ports.EventBus) *FulfillOrder {
 
 // Execute is idempotent: the marketplace retries until it gets a 2xx, so an
 // already authorized order publishes its event again instead of failing.
-func (uc *FulfillOrder) Execute(ctx context.Context, orderID string) error {
+func (uc *FulfillOrder) Execute(ctx context.Context, orderID, marketplaceOrderID string) error {
 	order, err := uc.repo.Get(ctx, orderID)
 	if err != nil {
 		return fmt.Errorf("get order %s: %w", orderID, err)
+	}
+	if order.IdempotencyKey != marketplaceOrderID {
+		return fmt.Errorf("order %s: %w", orderID, domain.ErrOrderNotFound)
 	}
 	switch order.Status {
 	case domain.StatusSentToERP, domain.StatusShipped:

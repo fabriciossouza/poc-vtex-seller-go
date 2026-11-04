@@ -72,7 +72,7 @@ paths:
     post:
       tags: [Protocolo de seller externo]
       summary: Autoriza o despacho (idempotente)
-      description: Publica o evento que o worker consome para chamar ERP, TMS e notificar a nota ao marketplace.
+      description: Publica o evento que o worker consome para chamar ERP, TMS e notificar a nota ao marketplace. Responde 404 quando `marketplaceOrderId` não é o do pedido.
       parameters:
         - { $ref: '#/components/parameters/SellerOrderId' }
       requestBody:
@@ -97,6 +97,7 @@ paths:
     post:
       tags: [Protocolo de seller externo]
       summary: Cancelamento
+      description: Responde 404 quando `marketplaceOrderId` não é o do pedido.
       parameters:
         - { $ref: '#/components/parameters/SellerOrderId' }
       requestBody:
