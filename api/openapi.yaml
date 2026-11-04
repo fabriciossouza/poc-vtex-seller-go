@@ -1,0 +1,419 @@
+openapi: 3.0.3
+info:
+  title: Seller externo VTEX em Go (POC)
+  version: 1.0.0
+  description: |
+    Implementa o protocolo de seller externo da VTEX (o marketplace chama o seller) e uma superficie de
+    demonstracao. O marketplace desta demo e um simulador que segue o contrato documentado em
+    developers.vtex.com; nao e uma loja VTEX real.
+
+    Os endpoints `/pvt/...` sao os do protocolo. Os endpoints `/demo/...` comandam o simulador:
+    use `POST /demo/orders` e `POST /demo/orders/{marketplaceOrderId}/fulfill` para um fluxo pronto.
+    Chamar `POST /pvt/orders` direto exige que `marketplaceServicesEndpoint` esteja na allowlist do servidor
+    (protecao contra SSRF); fora dela a resposta e 400.
+
+    O uso e limitado por IP: excedendo, a resposta e 429 com `Retry-After`.
+servers:
+  - url: /
+tags:
+  - name: Protocolo de seller externo
+    description: Chamados pelo marketplace.
+  - name: Demo
+    description: Simulador de marketplace e controles do painel.
+  - name: Operacao
+paths:
+  /pvt/orderForms/simulation:
+    post:
+      tags: [Protocolo de seller externo]
+      summary: Simulacao de carrinho (preco, estoque e frete)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SimulationRequest' }
+            example:
+              postalCode: 22270-030
+              country: BRA
+              items: [{ id: '6', quantity: 1, seller: '01' }]
+      responses:
+        '200':
+          description: Itens com preco, saldo de estoque e SLAs de entrega (sem SLA quando nao ha estoque).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SimulationResponse' }
+        '400': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /pvt/orders:
+    post:
+      tags: [Protocolo de seller externo]
+      summary: Order placement (idempotente por marketplaceOrderId)
+      description: |
+        Repetir o mesmo `marketplaceOrderId` devolve o pedido criado na primeira vez e nao reserva estoque de novo.
+        Reserva estoque ao criar; sem estoque a resposta e 409.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PlacementRequest' }
+      responses:
+        '200':
+          description: Pedido criado (ou o ja existente).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlacementResponse' }
+        '400': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /pvt/orders/{sellerOrderId}/fulfill:
+    post:
+      tags: [Protocolo de seller externo]
+      summary: Autoriza o despacho (idempotente)
+      description: Publica o evento que o worker consome para chamar ERP, TMS e notificar a nota ao marketplace.
+      parameters:
+        - { $ref: '#/components/parameters/SellerOrderId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [marketplaceOrderId]
+              properties:
+                marketplaceOrderId: { type: string }
+      responses:
+        '200':
+          description: Despacho autorizado.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Receipt' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /pvt/orders/{sellerOrderId}/cancel:
+    post:
+      tags: [Protocolo de seller externo]
+      summary: Cancelamento
+      parameters:
+        - { $ref: '#/components/parameters/SellerOrderId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [marketplaceOrderId, marketplaceOrderGroup, cancellationRequestId, cancellationRequestDate, reason, requestedByUser]
+              properties:
+                marketplaceOrderId: { type: string }
+                marketplaceOrderGroup: { type: string }
+                cancellationRequestId: { type: string }
+                cancellationRequestDate: { type: string }
+                reason: { type: string }
+                requestedByUser: { type: boolean }
+      responses:
+        '200':
+          description: Cancelamento confirmado.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Receipt' }
+        '400': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /demo/orders:
+    post:
+      tags: [Demo]
+      summary: O simulador faz simulacao e placement
+      description: Todos os campos sao opcionais. Repetir o mesmo `marketplaceOrderId` mostra a idempotencia (`duplicate: true`).
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                marketplaceOrderId: { type: string, pattern: '^[A-Za-z0-9-]{1,40}$' }
+                sku: { type: string, default: '6', description: 'SKUs da demo: 6, 7, 8 e 9 (o 9 esta sem estoque).' }
+                quantity: { type: integer, minimum: 1, maximum: 10, default: 1 }
+      responses:
+        '200':
+          description: Pedido criado no seller.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  marketplaceOrderId: { type: string }
+                  sellerOrderId: { type: string }
+                  duplicate: { type: boolean }
+        '400': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /demo/orders/{marketplaceOrderId}/fulfill:
+    post:
+      tags: [Demo]
+      summary: O simulador autoriza o despacho
+      parameters:
+        - name: marketplaceOrderId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Fulfill aceito pelo seller. }
+        '404': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /demo/mkt/pvt/orders/{marketplaceOrderId}/invoice:
+    post:
+      tags: [Demo]
+      summary: Recebe a nota que o seller envia (papel do marketplace)
+      description: Uma nota repetida recebe 409, como no marketplace real; o seller trata 409 como sucesso.
+      parameters:
+        - name: marketplaceOrderId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [invoiceNumber]
+              properties:
+                type: { type: string, example: Output }
+                invoiceNumber: { type: string, example: INV-959311095 }
+                trackingNumber: { type: string }
+      responses:
+        '200': { description: Nota registrada. }
+        '400': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /demo/state:
+    get:
+      tags: [Demo]
+      summary: Estado da demo (pedidos, linha do tempo, circuit breaker, DLQ, ERP e estoque)
+      responses:
+        '200':
+          description: Estado atual.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DemoState' }
+  /demo/erp:
+    post:
+      tags: [Demo]
+      summary: Derruba ou religa o mock do ERP
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [failing]
+              properties:
+                failing: { type: boolean }
+      responses:
+        '200': { description: ERP atualizado. }
+        '502': { $ref: '#/components/responses/Error' }
+  /demo/dlq/replay:
+    post:
+      tags: [Demo]
+      summary: Reprocessa a DLQ pelo mesmo retry e circuit breaker
+      responses:
+        '200':
+          description: Contagem do reprocessamento.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  replayed: { type: integer }
+                  failed: { type: integer, description: 'Continuam na DLQ (por exemplo, breaker ainda aberto).' }
+                  discarded: { type: integer }
+  /demo/reset:
+    post:
+      tags: [Demo]
+      summary: Limpa pedidos, filas, breaker, estoque e mocks
+      description: A demo tambem se limpa sozinha a cada hora.
+      responses:
+        '200': { description: Estado limpo. }
+  /healthz:
+    get:
+      tags: [Operacao]
+      summary: Saude do servico (inclui o Redis)
+      responses:
+        '200': { description: ok }
+        '503': { description: Redis indisponivel }
+  /metrics:
+    get:
+      tags: [Operacao]
+      summary: Metricas no formato Prometheus
+      responses:
+        '200':
+          description: Texto de exposicao do Prometheus.
+          content:
+            text/plain:
+              schema: { type: string }
+components:
+  parameters:
+    SellerOrderId:
+      name: sellerOrderId
+      in: path
+      required: true
+      description: O `orderId` devolvido no placement.
+      schema: { type: string }
+  responses:
+    Error:
+      description: Erro.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    RateLimited:
+      description: Muitas requisicoes deste IP.
+      headers:
+        Retry-After: { schema: { type: string } }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string }
+            message: { type: string }
+    SimulationRequest:
+      type: object
+      required: [items]
+      properties:
+        postalCode: { type: string }
+        country: { type: string }
+        items:
+          type: array
+          maxItems: 50
+          items:
+            type: object
+            required: [id, quantity]
+            properties:
+              id: { type: string }
+              quantity: { type: integer, minimum: 1 }
+              seller: { type: string }
+    SimulationResponse:
+      type: object
+      properties:
+        country: { type: string }
+        postalCode: { type: string }
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              requestIndex: { type: integer }
+              quantity: { type: integer }
+              seller: { type: string }
+              price: { type: integer, description: Centavos. }
+              listPrice: { type: integer }
+              measurementUnit: { type: string }
+              unitMultiplier: { type: integer }
+        logisticsInfo:
+          type: array
+          items:
+            type: object
+            properties:
+              itemIndex: { type: integer }
+              quantity: { type: integer }
+              shipsTo: { type: array, items: { type: string } }
+              stockBalance: { type: integer }
+              slas:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id: { type: string }
+                    deliveryChannel: { type: string }
+                    name: { type: string }
+                    shippingEstimate: { type: string }
+                    price: { type: integer }
+    PlacementRequest:
+      type: object
+      required: [marketplaceOrderId, marketplaceServicesEndpoint, items]
+      properties:
+        marketplaceOrderId: { type: string }
+        marketplaceServicesEndpoint: { type: string, description: 'Deve estar na allowlist do servidor.' }
+        items:
+          type: array
+          maxItems: 50
+          items:
+            type: object
+            required: [id, quantity, price]
+            properties:
+              id: { type: string }
+              quantity: { type: integer }
+              seller: { type: string }
+              price: { type: integer, description: Centavos. }
+    PlacementResponse:
+      type: object
+      properties:
+        marketplaceOrderId: { type: string }
+        orderId: { type: string }
+        items: { type: array, items: { type: object } }
+    Receipt:
+      type: object
+      properties:
+        date: { type: string }
+        marketplaceOrderId: { type: string }
+        orderId: { type: string }
+        receipt: { type: string }
+    DemoState:
+      type: object
+      properties:
+        serverTime: { type: string, format: date-time }
+        orders:
+          type: array
+          items:
+            type: object
+            properties:
+              marketplaceOrderId: { type: string }
+              sellerOrderId: { type: string }
+              status: { type: string, enum: [not_created, received, authorized, sent_to_erp, shipped, failed, cancelled] }
+              trackingCode: { type: string }
+              events:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    at: { type: string, format: date-time }
+                    source: { type: string }
+                    level: { type: string, enum: [info, ok, error] }
+                    message: { type: string }
+        breaker:
+          type: object
+          properties:
+            state: { type: string, enum: [closed, open, half-open] }
+            consecutiveFailures: { type: integer }
+            openTimeoutMs: { type: integer }
+            retryInMs: { type: integer }
+        dlq:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              orderId: { type: string }
+              type: { type: string }
+              reason: { type: string }
+              attempts: { type: integer }
+              failedAt: { type: string, format: date-time }
+        erp:
+          type: object
+          properties:
+            failing: { type: boolean }
+        stock:
+          type: array
+          items:
+            type: object
+            properties:
+              sku: { type: string }
+              name: { type: string }
+              priceCents: { type: integer }
+              available: { type: integer }
