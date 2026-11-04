@@ -188,6 +188,7 @@ func TestRestartedConsumerReceivesItsOwnPendingMessagesFirst(t *testing.T) {
 	if err != nil || again.ID != first.ID {
 		t.Fatalf("after restart: delivery = %+v, err = %v; want %+v", again, err, first)
 	}
+	_ = after.Ack(ctx, again.ID)
 	if _, err := after.Receive(ctx); !errors.Is(err, ports.ErrNoDelivery) {
 		t.Fatalf("second receive err = %v, want ErrNoDelivery", err)
 	}
