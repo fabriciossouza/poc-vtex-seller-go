@@ -522,3 +522,19 @@ func TestReplayTreatsALetterOfACancelledOrderAsDone(t *testing.T) {
 		t.Fatalf("result = %+v, err = %v, dlq = %v, ERP calls = %d", res, err, e.consumer.dlq, e.erp.calls)
 	}
 }
+
+func TestDuplicateEventResendsTheInvoiceOnceMoreWhichTheMarketplaceClientToleratesWith409(t *testing.T) {
+	e := newEnv(t)
+	e.consumer.push(e.authorized("ord-1"))
+	e.consumer.push(e.authorized("ord-1"))
+
+	_ = e.worker.ProcessNext(context.Background())
+	_ = e.worker.ProcessNext(context.Background())
+
+	// The order is already shipped on the second delivery, but the invoice
+	// notification is the last step and keeps no state, so it is sent again.
+	// Accepted: marketplace.Client treats 409 (same invoice number) as success.
+	if e.mkt.notifications != 2 || e.erp.calls != 1 || e.tms.calls != 1 {
+		t.Fatalf("notifications = %d, ERP calls = %d, TMS calls = %d", e.mkt.notifications, e.erp.calls, e.tms.calls)
+	}
+}

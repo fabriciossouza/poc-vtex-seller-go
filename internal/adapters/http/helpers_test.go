@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -97,7 +98,13 @@ func newEnv(t *testing.T, stock map[string]int) *env {
 		Fulfill:  app.NewFulfillOrder(repo, bus),
 		Cancel:   app.NewCancelOrder(repo),
 		Clock:    fixedClock{},
-		NewID:    func() string { ids++; return "95931109" + strconv.Itoa(ids) },
+		ValidateEndpoint: func(endpoint string) error {
+			if endpoint == "https://marketplace-exemplo.myvtex.com/" {
+				return nil
+			}
+			return errors.New("endpoint not allowed")
+		},
+		NewID: func() string { ids++; return "95931109" + strconv.Itoa(ids) },
 	})
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)

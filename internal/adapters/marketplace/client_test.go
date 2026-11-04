@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -22,6 +23,7 @@ var issuedAt = time.Date(2026, 11, 5, 10, 0, 0, 0, time.UTC)
 type recorder struct {
 	mu     sync.Mutex
 	paths  []string
+	query  []string
 	bodies []map[string]any
 	status []int
 }
@@ -31,6 +33,7 @@ func (r *recorder) handler(w http.ResponseWriter, req *http.Request) {
 	defer r.mu.Unlock()
 	var body map[string]any
 	_ = json.NewDecoder(req.Body).Decode(&body)
+	r.query = append(r.query, req.URL.RawQuery)
 	r.paths = append(r.paths, req.Method+" "+req.URL.Path+" "+req.Header.Get("Content-Type"))
 	r.bodies = append(r.bodies, body)
 	code := http.StatusOK
@@ -152,5 +155,43 @@ func TestNotifyInvoiceRefusesEndpointsOutsideTheAllowlist(t *testing.T) {
 	}
 	if len(rec.paths) != 0 {
 		t.Fatalf("requests = %v", rec.paths)
+	}
+}
+
+func TestNotifyInvoiceKeepsTheEndpointPathPrefixAndQueryString(t *testing.T) {
+	client, rec, endpoint := setup(t)
+
+	if err := client.NotifyInvoice(context.Background(), shippedOrder(endpoint+"api/?an=seller&sc=1")); err != nil {
+		t.Fatalf("NotifyInvoice: %v", err)
+	}
+
+	if want := "POST /api/pvt/orders/1138342255777-01/invoice application/json"; len(rec.paths) != 1 || rec.paths[0] != want {
+		t.Fatalf("requests = %v, want %q", rec.paths, want)
+	}
+	if rec.query[0] != "an=seller&sc=1" {
+		t.Fatalf("query = %q", rec.query[0])
+	}
+}
+
+func TestValidateEndpointAcceptsOnlyAllowedHostsAndNeverEchoesTheValue(t *testing.T) {
+	client, _, endpoint := setup(t)
+	if err := client.ValidateEndpoint(endpoint); err != nil {
+		t.Fatalf("allowed endpoint: %v", err)
+	}
+
+	secret := "http://internal.example:9/path?token=s3cret"
+	err := client.ValidateEndpoint(secret)
+
+	if !errors.Is(err, marketplace.ErrEndpointNotAllowed) {
+		t.Fatalf("err = %v", err)
+	}
+	for _, leaked := range []string{"internal.example", "s3cret"} {
+		if strings.Contains(err.Error(), leaked) {
+			t.Errorf("error message %q leaks %q (it ends up in the DLQ reason)", err, leaked)
+		}
+	}
+	notifyErr := client.NotifyInvoice(context.Background(), shippedOrder(secret))
+	if notifyErr == nil || strings.Contains(notifyErr.Error(), "s3cret") {
+		t.Errorf("NotifyInvoice error = %v", notifyErr)
 	}
 }
