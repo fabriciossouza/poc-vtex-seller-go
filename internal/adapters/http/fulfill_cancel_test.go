@@ -154,3 +154,24 @@ func TestConcurrentModificationIsReportedAsConflictSoTheMarketplaceRetries(t *te
 		t.Errorf("fulfill: status = %d, want 409", status)
 	}
 }
+
+func TestFulfillAndCancelRefuseAMarketplaceOrderIDThatIsNotTheOrders(t *testing.T) {
+	for _, action := range []string{"fulfill", "cancel"} {
+		e := newEnv(t, nil)
+		orderID := placeContractOrder(t, e)
+		body := readJSONFile(t, "cancel_request.json")
+		body["marketplaceOrderId"] = "9999999999999-01"
+
+		status, got := e.post(t, "/pvt/orders/"+orderID+"/"+action, body)
+
+		if status != http.StatusNotFound {
+			t.Errorf("%s: status = %d, want 404, body = %v", action, status, got)
+		}
+		if stored, _ := e.repo.Get(context.Background(), orderID); stored.Status != domain.StatusReceived {
+			t.Errorf("%s: status = %s, the action must not run", action, stored.Status)
+		}
+		if len(e.bus.events) != 0 {
+			t.Errorf("%s: events = %+v", action, e.bus.events)
+		}
+	}
+}
