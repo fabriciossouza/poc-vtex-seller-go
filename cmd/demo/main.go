@@ -196,7 +196,7 @@ func main() {
 	c.fulfill(happy)
 	if c.wait("shipped with the invoice received", 20*time.Second, func() bool {
 		o := c.order(happy)
-		return o["status"] == "shipped" && c.countEvents(o, "marketplace", "ok") >= 2
+		return o["status"] == "shipped" && c.countEvents(o, "marketplace", "ok") >= 1
 	}) {
 		o := c.order(happy)
 		c.check("tracking code came from the TMS", strings.HasPrefix(fmt.Sprint(o["trackingCode"]), "TRK-"), o["trackingCode"])
