@@ -84,6 +84,9 @@ type fakeConsumer struct {
 	ackErr    error
 	rejectErr error
 	onEmpty   func()
+	// receiveScript is consumed one entry per Receive before the queue is
+	// read; a non-nil entry is returned as the Receive error.
+	receiveScript []error
 }
 
 func (c *fakeConsumer) push(e domain.Event) {
@@ -93,6 +96,13 @@ func (c *fakeConsumer) push(e domain.Event) {
 func (c *fakeConsumer) Receive(context.Context) (ports.Delivery, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if len(c.receiveScript) > 0 {
+		err := c.receiveScript[0]
+		c.receiveScript = c.receiveScript[1:]
+		if err != nil {
+			return ports.Delivery{}, err
+		}
+	}
 	if len(c.queue) == 0 {
 		if c.onEmpty != nil {
 			c.onEmpty()
@@ -536,5 +546,112 @@ func TestDuplicateEventResendsTheInvoiceOnceMoreWhichTheMarketplaceClientTolerat
 	// Accepted: marketplace.Client treats 409 (same invoice number) as success.
 	if e.mkt.notifications != 2 || e.erp.calls != 1 || e.tms.calls != 1 {
 		t.Fatalf("notifications = %d, ERP calls = %d, TMS calls = %d", e.mkt.notifications, e.erp.calls, e.tms.calls)
+	}
+}
+
+var errQueueDown = errors.New("redis: connection refused")
+
+// runWithBackoff builds a worker whose queue-error pauses are recorded in
+// the returned sleeper instead of being waited for.
+func runWithBackoff(e *env, sleep func(time.Duration) error) *worker.Worker {
+	dispatch := app.NewDispatchToERP(e.repo, e.erp, e.tms, e.mkt)
+	retrier := resilience.NewRetrier(resilience.RetryConfig{MaxAttempts: 5, BaseDelay: time.Second, MaxDelay: 10 * time.Second}, e.sleeper, func() float64 { return 1 })
+	return worker.New(e.consumer, dispatch, retrier, e.breaker,
+		worker.WithBackoff(sleeperFunc(sleep), 100*time.Millisecond, 400*time.Millisecond))
+}
+
+type sleeperFunc func(time.Duration) error
+
+func (f sleeperFunc) Sleep(_ context.Context, d time.Duration) error { return f(d) }
+
+func TestRunSurvivesQueueErrorsBackingOffAndStillProcessesTheMessage(t *testing.T) {
+	e := newEnv(t)
+	e.consumer.receiveScript = []error{errQueueDown, errQueueDown, errQueueDown, errQueueDown, nil}
+	e.consumer.push(e.authorized("ord-1"))
+	ctx, cancel := context.WithCancel(context.Background())
+	e.consumer.onEmpty = cancel
+	var slept []time.Duration
+	w := runWithBackoff(e, func(d time.Duration) error { slept = append(slept, d); return nil })
+
+	if err := w.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if e.status(t) != domain.StatusShipped {
+		t.Fatalf("status = %s", e.status(t))
+	}
+	want := []time.Duration{100 * time.Millisecond, 200 * time.Millisecond, 400 * time.Millisecond, 400 * time.Millisecond}
+	if len(slept) != len(want) {
+		t.Fatalf("backoff = %v, want %v", slept, want)
+	}
+	for i := range want {
+		if slept[i] != want[i] {
+			t.Fatalf("backoff = %v, want %v", slept, want)
+		}
+	}
+}
+
+func TestRunBackoffRestartsAfterASuccessfulReceive(t *testing.T) {
+	e := newEnv(t)
+	e.consumer.receiveScript = []error{errQueueDown, errQueueDown, nil, errQueueDown}
+	e.consumer.push(e.authorized("ord-1"))
+	ctx, cancel := context.WithCancel(context.Background())
+	e.consumer.onEmpty = cancel
+	var slept []time.Duration
+	w := runWithBackoff(e, func(d time.Duration) error { slept = append(slept, d); return nil })
+
+	if err := w.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	want := []time.Duration{100 * time.Millisecond, 200 * time.Millisecond, 100 * time.Millisecond}
+	if len(slept) != len(want) || slept[2] != want[2] {
+		t.Fatalf("backoff = %v, want %v", slept, want)
+	}
+}
+
+func TestRunKeepsGoingWhenAckFails(t *testing.T) {
+	e := newEnv(t)
+	e.consumer.ackErr = errQueueDown
+	e.consumer.push(e.authorized("ord-1"))
+	ctx, cancel := context.WithCancel(context.Background())
+	e.consumer.onEmpty = cancel
+	var slept []time.Duration
+	w := runWithBackoff(e, func(d time.Duration) error { slept = append(slept, d); return nil })
+
+	if err := w.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(slept) != 1 {
+		t.Fatalf("backoff = %v, want one pause after the failed ack", slept)
+	}
+}
+
+func TestRunKeepsGoingWhenRejectFails(t *testing.T) {
+	e := newEnv(t)
+	e.erp.err = erpReject
+	e.consumer.rejectErr = errQueueDown
+	e.consumer.push(e.authorized("ord-1"))
+	ctx, cancel := context.WithCancel(context.Background())
+	e.consumer.onEmpty = cancel
+	var slept []time.Duration
+	w := runWithBackoff(e, func(d time.Duration) error { slept = append(slept, d); return nil })
+
+	if err := w.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(slept) != 1 {
+		t.Fatalf("backoff = %v, want one pause after the failed reject", slept)
+	}
+}
+
+func TestRunReturnsNilWhenShutdownInterruptsTheBackoff(t *testing.T) {
+	e := newEnv(t)
+	e.consumer.receiveScript = []error{errQueueDown}
+	ctx, cancel := context.WithCancel(context.Background())
+	w := runWithBackoff(e, func(time.Duration) error { cancel(); return ctx.Err() })
+
+	if err := w.Run(ctx); err != nil {
+		t.Fatalf("Run = %v, want nil on a normal shutdown", err)
 	}
 }
