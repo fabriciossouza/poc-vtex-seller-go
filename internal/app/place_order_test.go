@@ -49,3 +49,23 @@ func TestPlaceOrderRejectsInvalidOrder(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestPlaceOrderKeepsMarketplaceEndpointAndItemPrice(t *testing.T) {
+	repo := newMemRepo()
+	uc := app.NewPlaceOrder(repo, fixedClock{testNow})
+
+	order, err := uc.Execute(context.Background(), app.PlaceOrderCommand{
+		OrderID:             "ord-1",
+		IdempotencyKey:      "key-1",
+		MarketplaceEndpoint: "https://marketplace.example/",
+		Items:               []domain.Item{{SKU: "a", Quantity: 1, PriceCents: 2499}},
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	stored, _ := repo.Get(context.Background(), order.ID)
+	if stored.MarketplaceEndpoint != "https://marketplace.example/" || stored.Items[0].PriceCents != 2499 {
+		t.Fatalf("stored = %+v", stored)
+	}
+}

@@ -54,6 +54,23 @@ func TestDispatchToERPHappyPathReachesShipped(t *testing.T) {
 	}
 }
 
+func TestDispatchToERPNotifiesMarketplaceWithEndpointAndPrices(t *testing.T) {
+	env := newDispatchEnv(t)
+	o, _ := env.repo.Get(context.Background(), "ord-1")
+	o.MarketplaceEndpoint = "https://marketplace.example/"
+	o.Items[0].PriceCents = 2499
+	_ = env.repo.Save(context.Background(), o)
+
+	if err := env.uc.Execute(context.Background(), "ord-1"); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	got := env.mkt.last
+	if got.MarketplaceEndpoint != "https://marketplace.example/" || got.IdempotencyKey != "key-1" || got.Items[0].PriceCents != 2499 {
+		t.Fatalf("notified order = %+v", got)
+	}
+}
+
 func TestDispatchToERPFailureKeepsOrderAuthorizedAndReturnsError(t *testing.T) {
 	env := newDispatchEnv(t)
 	boom := errors.New("sap down")

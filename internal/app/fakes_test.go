@@ -51,16 +51,18 @@ func (f *fakeERP) SendOrder(context.Context, domain.Order) error {
 type fakeMarketplace struct {
 	err      error
 	notified map[string]string
+	last     domain.Order
 }
 
-func (f *fakeMarketplace) NotifyInvoice(_ context.Context, orderID, tracking string) error {
+func (f *fakeMarketplace) NotifyInvoice(_ context.Context, order domain.Order) error {
 	if f.err != nil {
 		return f.err
 	}
 	if f.notified == nil {
 		f.notified = map[string]string{}
 	}
-	f.notified[orderID] = tracking
+	f.notified[order.ID] = order.TrackingCode
+	f.last = order
 	return nil
 }
 
