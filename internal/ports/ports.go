@@ -2,6 +2,7 @@ package ports
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/fabriciossouza/poc-vtex-seller-go/internal/domain"
@@ -47,4 +48,32 @@ type EventBus interface {
 
 type Clock interface {
 	Now() time.Time
+}
+
+var ErrNoDelivery = errors.New("no delivery available")
+
+type Delivery struct {
+	ID    string
+	Event domain.Event
+}
+
+type DeadLetter struct {
+	ID       string
+	Event    domain.Event
+	Reason   string
+	Attempts int
+	FailedAt time.Time
+}
+
+// EventConsumer is the receiving side of the queue. A delivery stays pending
+// (and is redelivered after a while) until it is acked or rejected.
+type EventConsumer interface {
+	// Receive waits a bounded time and returns ErrNoDelivery when nothing arrived.
+	Receive(ctx context.Context) (Delivery, error)
+	Ack(ctx context.Context, deliveryID string) error
+	// Reject moves the delivery to the dead-letter queue and settles it.
+	Reject(ctx context.Context, delivery Delivery, reason string, attempts int) error
+	DeadLetters(ctx context.Context) ([]DeadLetter, error)
+	// Discard removes a dead letter once it was reprocessed.
+	Discard(ctx context.Context, deadLetterID string) error
 }
