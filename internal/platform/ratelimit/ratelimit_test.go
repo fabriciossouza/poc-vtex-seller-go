@@ -1,0 +1,173 @@
+package ratelimit_test
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"testing"
+	"time"
+
+	"github.com/fabriciossouza/poc-vtex-seller-go/internal/platform/ratelimit"
+)
+
+type clock struct{ now time.Time }
+
+func (c *clock) Now() time.Time          { return c.now }
+func (c *clock) Advance(d time.Duration) { c.now = c.now.Add(d) }
+
+func newClock() *clock { return &clock{now: time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)} }
+
+func TestLimiterAllowsTheBurstThenDeniesUntilTokensRefill(t *testing.T) {
+	c := newClock()
+	l := ratelimit.New(2, 3, c.Now) // 2 tokens/s, burst 3
+
+	for i := 0; i < 3; i++ {
+		if !l.Allow("a") {
+			t.Fatalf("request %d inside the burst was denied", i+1)
+		}
+	}
+	if l.Allow("a") {
+		t.Fatal("request over the burst was allowed")
+	}
+	c.Advance(500 * time.Millisecond) // one token back
+	if !l.Allow("a") {
+		t.Fatal("request after refill was denied")
+	}
+	if l.Allow("a") {
+		t.Fatal("only one token should have been refilled")
+	}
+}
+
+func TestLimiterKeysAreIndependent(t *testing.T) {
+	l := ratelimit.New(1, 1, newClock().Now)
+
+	if !l.Allow("a") || l.Allow("a") {
+		t.Fatal("key a: want first allowed, second denied")
+	}
+	if !l.Allow("b") {
+		t.Fatal("key b must have its own bucket")
+	}
+}
+
+func TestParseCIDRsAcceptsPrefixesAndPlainAddresses(t *testing.T) {
+	got, err := ratelimit.ParseCIDRs(" 10.0.0.0/8, 192.168.1.5 ,")
+	if err != nil || len(got) != 2 {
+		t.Fatalf("got %v, err %v", got, err)
+	}
+	if !got[0].Contains(netip.MustParseAddr("10.9.9.9")) || !got[1].Contains(netip.MustParseAddr("192.168.1.5")) {
+		t.Fatalf("prefixes = %v", got)
+	}
+	if none, err := ratelimit.ParseCIDRs(""); err != nil || len(none) != 0 {
+		t.Fatalf("empty = %v, %v", none, err)
+	}
+	if _, err := ratelimit.ParseCIDRs("not-a-cidr"); err == nil {
+		t.Fatal("want an error for an invalid entry")
+	}
+}
+
+func request(remote, xff string) *http.Request {
+	r := httptest.NewRequest(http.MethodGet, "/x", nil)
+	r.RemoteAddr = remote
+	if xff != "" {
+		r.Header.Set("X-Forwarded-For", xff)
+	}
+	return r
+}
+
+func TestClientIPIgnoresForwardedForFromUntrustedPeers(t *testing.T) {
+	trusted, _ := ratelimit.ParseCIDRs("10.0.0.0/8")
+
+	got := ratelimit.ClientIP(request("203.0.113.7:5000", "1.2.3.4"), trusted)
+
+	if got != "203.0.113.7" {
+		t.Fatalf("ClientIP = %s, want the peer address", got)
+	}
+}
+
+func TestClientIPUsesTheRightmostUntrustedHopBehindATrustedProxy(t *testing.T) {
+	trusted, _ := ratelimit.ParseCIDRs("10.0.0.0/8")
+
+	// The leftmost entry is whatever the client wrote; the proxy appended 198.51.100.9.
+	got := ratelimit.ClientIP(request("10.0.0.2:5000", "6.6.6.6, 198.51.100.9, 10.0.0.3"), trusted)
+
+	if got != "198.51.100.9" {
+		t.Fatalf("ClientIP = %s, want 198.51.100.9", got)
+	}
+}
+
+func TestClientIPFallsBackToThePeerWhenForwardedForIsUnusable(t *testing.T) {
+	trusted, _ := ratelimit.ParseCIDRs("10.0.0.0/8")
+
+	for _, xff := range []string{"", "garbage", "10.0.0.9"} {
+		if got := ratelimit.ClientIP(request("10.0.0.2:5000", xff), trusted); got != "10.0.0.2" {
+			t.Fatalf("xff %q: ClientIP = %s, want the peer", xff, got)
+		}
+	}
+}
+
+func okHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+}
+
+func serve(h http.Handler, r *http.Request) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	return rec
+}
+
+func TestMiddlewareAnswers429WithRetryAfterWhenTheIPExceedsItsBudget(t *testing.T) {
+	h := ratelimit.Middleware(ratelimit.New(1, 2, newClock().Now), nil)(okHandler())
+
+	for i := 0; i < 2; i++ {
+		if rec := serve(h, request("203.0.113.7:1", "")); rec.Code != http.StatusOK {
+			t.Fatalf("request %d: status %d", i+1, rec.Code)
+		}
+	}
+	rec := serve(h, request("203.0.113.7:2", ""))
+
+	if rec.Code != http.StatusTooManyRequests || rec.Header().Get("Retry-After") == "" {
+		t.Fatalf("status = %d, Retry-After = %q", rec.Code, rec.Header().Get("Retry-After"))
+	}
+	if rec := serve(h, request("203.0.113.8:1", "")); rec.Code != http.StatusOK {
+		t.Fatalf("another IP was limited: %d", rec.Code)
+	}
+}
+
+func TestForgedForwardedForFromAnUntrustedClientDoesNotEscapeTheLimit(t *testing.T) {
+	trusted, _ := ratelimit.ParseCIDRs("10.0.0.0/8")
+	h := ratelimit.Middleware(ratelimit.New(1, 2, newClock().Now), trusted)(okHandler())
+
+	var last int
+	for _, forged := range []string{"1.1.1.1", "2.2.2.2", "3.3.3.3", "4.4.4.4"} {
+		last = serve(h, request("203.0.113.7:1", forged)).Code
+	}
+
+	if last != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429: a rotating forged header must not mint new buckets", last)
+	}
+}
+
+func TestMiddlewareKeysByTheForwardedClientWhenThePeerIsATrustedProxy(t *testing.T) {
+	trusted, _ := ratelimit.ParseCIDRs("10.0.0.0/8")
+	h := ratelimit.Middleware(ratelimit.New(1, 1, newClock().Now), trusted)(okHandler())
+
+	a1 := serve(h, request("10.0.0.2:1", "198.51.100.1")).Code
+	a2 := serve(h, request("10.0.0.2:1", "198.51.100.1")).Code
+	b1 := serve(h, request("10.0.0.2:1", "198.51.100.2")).Code
+
+	if a1 != http.StatusOK || a2 != http.StatusTooManyRequests || b1 != http.StatusOK {
+		t.Fatalf("a1 = %d, a2 = %d, b1 = %d; want 200, 429, 200", a1, a2, b1)
+	}
+}
+
+func TestMiddlewareDoesNotLimitExemptPaths(t *testing.T) {
+	h := ratelimit.Middleware(ratelimit.New(1, 1, newClock().Now), nil, "/healthz")(okHandler())
+
+	for i := 0; i < 5; i++ {
+		r := request("203.0.113.7:1", "")
+		r.URL.Path = "/healthz"
+		if rec := serve(h, r); rec.Code != http.StatusOK {
+			t.Fatalf("healthz request %d: %d", i+1, rec.Code)
+		}
+	}
+}
