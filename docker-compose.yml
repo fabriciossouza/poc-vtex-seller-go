@@ -5,12 +5,23 @@ name: poc-vtex
 # reverse proxy running on the host and reaching 127.0.0.1:${PORT}. Override
 # TRUSTED_PROXIES when the proxy comes from somewhere else (comma-separated
 # CIDRs); an address that is not listed cannot set X-Forwarded-For.
+#
+# redis, erp and tms live only on "backend" (internal: no route out, nothing
+# published). The seller is on both: "default" carries the published port,
+# "backend" reaches the three. Its own callback (/demo/mkt) arrives from its own
+# address on either network, so INTERNAL_NETS lists both subnets; the gateway
+# stays out of it because TRUSTED_PROXIES wins over INTERNAL_NETS.
 networks:
   default:
     ipam:
       config:
         - subnet: 172.30.0.0/24
           gateway: 172.30.0.1
+  backend:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.30.1.0/24
 
 x-logging: &logging
   driver: json-file
@@ -30,7 +41,7 @@ services:
       TMS_URL: http://tms:8080
       MARKETPLACE_ALLOWED_HOSTS: seller:8080
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.30.0.1/32}
-      INTERNAL_NETS: ${INTERNAL_NETS:-172.30.0.0/24}
+      INTERNAL_NETS: ${INTERNAL_NETS:-172.30.0.0/24,172.30.1.0/24}
       RATE_LIMIT_RPS: ${RATE_LIMIT_RPS:-10}
       RATE_LIMIT_BURST: ${RATE_LIMIT_BURST:-30}
     ports:
@@ -39,6 +50,9 @@ services:
       - /data:mode=0700,uid=65532,gid=65532,size=64m
     read_only: true
     mem_limit: 256m
+    memswap_limit: 256m
+    cpus: "1"
+    networks: [default, backend]
     pids_limit: 128
     logging: *logging
     cap_drop: [ALL]
@@ -67,6 +81,9 @@ services:
     tmpfs:
       - /tmp:size=64m
     mem_limit: 128m
+    memswap_limit: 128m
+    cpus: "0.5"
+    networks: [backend]
     pids_limit: 64
     logging: *logging
     cap_drop: [ALL]
@@ -84,6 +101,9 @@ services:
       target: tms-mock
     read_only: true
     mem_limit: 64m
+    memswap_limit: 64m
+    cpus: "0.5"
+    networks: [backend]
     pids_limit: 64
     logging: *logging
     cap_drop: [ALL]
@@ -98,6 +118,9 @@ services:
     tmpfs:
       - /data:uid=999,gid=999,size=64m
     mem_limit: 128m
+    memswap_limit: 128m
+    cpus: "0.5"
+    networks: [backend]
     pids_limit: 64
     logging: *logging
     cap_drop: [ALL]

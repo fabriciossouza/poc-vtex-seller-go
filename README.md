@@ -125,10 +125,10 @@ make down   # derruba tudo e limpa o estado
 
 A porta é publicada só em `127.0.0.1` (variável `PORT`). Os contêineres rodam com sistema de arquivos somente leitura, sem capabilities, com o estado em tmpfs de 64 MB, limites de memória e de processos e logs rotacionados (10 MB, 3 arquivos). As variáveis de ambiente do seller estão em [`cmd/seller/config.go`](cmd/seller/config.go).
 
-A rede do compose tem sub-rede fixa (`172.30.0.0/24`, gateway `172.30.0.1`). Duas variáveis dependem dela:
+O compose tem duas redes de sub-rede fixa: a de ingresso (`172.30.0.0/24`, gateway `172.30.0.1`), onde fica a porta publicada, e a `backend` (`172.30.1.0/24`, `internal: true`, sem rota para fora), onde ficam Redis, ERP e TMS. Só o seller está nas duas. Duas variáveis dependem dela:
 
 - `TRUSTED_PROXIES` (padrão `172.30.0.1/32`): CIDRs de proxies reversos cujo `X-Forwarded-For` é aceito para identificar o cliente. O padrão é o gateway da ponte, que é o endereço que o seller enxerga quando um proxy no host acessa `127.0.0.1:${PORT}`. Sem isso, todos os visitantes dividem o limite do proxy.
-- `INTERNAL_NETS` (padrão `172.30.0.0/24`): redes de onde `/demo/mkt/` (o retorno da nota) é aceito e isento do limite, desde que a requisição não tenha passado por proxy.
+- `INTERNAL_NETS` (padrão `172.30.0.0/24,172.30.1.0/24`): redes de onde `/demo/mkt/` (o retorno da nota) é aceito e isento do limite, desde que a requisição não tenha cabeçalho de proxy (`X-Forwarded-For`, `Forwarded`, `X-Real-Ip`, mesmo vazio) e a origem não seja um proxy confiável (o gateway nunca conta como interno).
 
 Exemplo com outro proxy: `TRUSTED_PROXIES=172.30.0.1/32,10.1.0.0/16 make up`.
 

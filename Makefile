@@ -23,7 +23,7 @@ test-php:
 # Runs against the Redis of the compose stack, on its network.
 test-integration: .cache/go-build
 	docker compose up -d --wait redis
-	$(GO_RUN) --network poc-vtex_default -e REDIS_ADDR=redis:6379 $(GO_IMAGE) go test -tags integration -count=1 -v -run RealRedis ./internal/adapters/queue
+	$(GO_RUN) --network poc-vtex_backend -e REDIS_ADDR=redis:6379 $(GO_IMAGE) go test -tags integration -count=1 -v -run RealRedis ./internal/adapters/queue
 
 up:
 	PORT=$(PORT) docker compose up -d --build --wait
