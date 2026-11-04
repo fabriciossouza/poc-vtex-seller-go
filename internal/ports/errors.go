@@ -15,3 +15,14 @@ func (e *StatusError) Error() string {
 }
 
 func (e *StatusError) Transient() bool { return e.StatusCode >= 500 }
+
+type versionConflict struct{}
+
+func (versionConflict) Error() string { return "order was modified concurrently" }
+
+// Transient: the caller can reload the order and try again.
+func (versionConflict) Transient() bool { return true }
+
+// ErrVersionConflict is returned by OrderRepo.Save when the order changed
+// since it was read.
+var ErrVersionConflict error = versionConflict{}

@@ -3,9 +3,12 @@ package httpadapter_test
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	httpadapter "github.com/fabriciossouza/poc-vtex-seller-go/internal/adapters/http"
 	"github.com/fabriciossouza/poc-vtex-seller-go/internal/domain"
+	"github.com/fabriciossouza/poc-vtex-seller-go/internal/ports"
 )
 
 func placeContractOrder(t *testing.T, e *env) string {
@@ -131,5 +134,23 @@ func TestCancelMapsDomainErrorsToStatus(t *testing.T) {
 	}
 	if status, _ := e.post(t, "/pvt/orders/"+orderID+"/cancel", body); status != http.StatusConflict {
 		t.Errorf("shipped order: status = %d, want 409 (the marketplace must refuse by sending the invoice)", status)
+	}
+}
+
+type conflictingAction struct{}
+
+func (conflictingAction) Execute(context.Context, string) error { return ports.ErrVersionConflict }
+
+func TestConcurrentModificationIsReportedAsConflictSoTheMarketplaceRetries(t *testing.T) {
+	handler := httpadapter.NewHandler(httpadapter.Deps{Fulfill: conflictingAction{}, Cancel: conflictingAction{}, Clock: fixedClock{}, NewID: func() string { return "x" }})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+	e := &env{srv: srv}
+
+	if status, _ := e.post(t, "/pvt/orders/o/cancel", readJSONFile(t, "cancel_request.json")); status != http.StatusConflict {
+		t.Errorf("cancel: status = %d, want 409", status)
+	}
+	if status, _ := e.post(t, "/pvt/orders/o/fulfill", `{"marketplaceOrderId":"m"}`); status != http.StatusConflict {
+		t.Errorf("fulfill: status = %d, want 409", status)
 	}
 }

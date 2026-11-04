@@ -33,6 +33,8 @@ type MarketplacePort interface {
 
 // OrderRepo implementations return domain.ErrOrderNotFound from Get and
 // FindByIdempotencyKey when nothing matches. Returned orders are copies.
+// Updating an order whose Version no longer matches the stored one returns
+// ErrVersionConflict, and a successful Save bumps order.Version.
 // When Save would insert an order whose idempotency key already belongs to
 // another order (a concurrent placement), it overwrites *order with the stored
 // one and returns nil, so the caller proceeds with the single surviving order.

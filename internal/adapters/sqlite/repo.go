@@ -11,6 +11,7 @@ import (
 	"modernc.org/sqlite"
 
 	"github.com/fabriciossouza/poc-vtex-seller-go/internal/domain"
+	"github.com/fabriciossouza/poc-vtex-seller-go/internal/ports"
 )
 
 // uniqueConstraint is SQLITE_CONSTRAINT_UNIQUE.
@@ -24,10 +25,11 @@ CREATE TABLE IF NOT EXISTS orders (
 	status TEXT NOT NULL,
 	tracking_code TEXT NOT NULL,
 	created_at TEXT NOT NULL,
-	marketplace_endpoint TEXT NOT NULL
+	marketplace_endpoint TEXT NOT NULL,
+	version INTEGER NOT NULL DEFAULT 0
 )`
 
-const columns = "id, idempotency_key, items, status, tracking_code, created_at, marketplace_endpoint"
+const columns = "id, idempotency_key, items, status, tracking_code, created_at, marketplace_endpoint, version"
 
 type Repo struct {
 	db *sql.DB
@@ -50,16 +52,38 @@ func Open(path string) (*Repo, error) {
 
 func (r *Repo) Close() error { return r.db.Close() }
 
+// Save inserts a new order or updates an existing one if its version still
+// matches the stored one (optimistic locking), returning
+// ports.ErrVersionConflict otherwise.
 func (r *Repo) Save(ctx context.Context, order *domain.Order) error {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE orders SET status = ?, tracking_code = ?, version = version + 1 WHERE id = ? AND version = ?`,
+		string(order.Status), order.TrackingCode, order.ID, order.Version)
+	if err != nil {
+		return fmt.Errorf("update order %s: %w", order.ID, err)
+	}
+	if n, _ := res.RowsAffected(); n == 1 {
+		order.Version++
+		return nil
+	}
+	var exists int
+	switch err := r.db.QueryRowContext(ctx, `SELECT 1 FROM orders WHERE id = ?`, order.ID).Scan(&exists); {
+	case err == nil:
+		return ports.ErrVersionConflict
+	case !errors.Is(err, sql.ErrNoRows):
+		return fmt.Errorf("check order %s: %w", order.ID, err)
+	}
+	return r.insert(ctx, order)
+}
+
+func (r *Repo) insert(ctx context.Context, order *domain.Order) error {
 	items, err := json.Marshal(order.Items)
 	if err != nil {
 		return fmt.Errorf("encode items: %w", err)
 	}
-	_, err = r.db.ExecContext(ctx, `
-		INSERT INTO orders (`+columns+`) VALUES (?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET status = excluded.status, tracking_code = excluded.tracking_code`,
+	_, err = r.db.ExecContext(ctx, `INSERT INTO orders (`+columns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		order.ID, order.IdempotencyKey, string(items), string(order.Status), order.TrackingCode,
-		order.CreatedAt.UTC().Format(time.RFC3339Nano), order.MarketplaceEndpoint)
+		order.CreatedAt.UTC().Format(time.RFC3339Nano), order.MarketplaceEndpoint, order.Version)
 	if err == nil {
 		return nil
 	}
@@ -89,7 +113,7 @@ func (r *Repo) queryOne(ctx context.Context, column, value string) (*domain.Orde
 		o                      domain.Order
 		items, status, created string
 	)
-	err := row.Scan(&o.ID, &o.IdempotencyKey, &items, &status, &o.TrackingCode, &created, &o.MarketplaceEndpoint)
+	err := row.Scan(&o.ID, &o.IdempotencyKey, &items, &status, &o.TrackingCode, &created, &o.MarketplaceEndpoint, &o.Version)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, domain.ErrOrderNotFound
 	}

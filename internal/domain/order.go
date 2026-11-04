@@ -50,6 +50,8 @@ type Order struct {
 	// MarketplaceEndpoint is where the marketplace expects this order's
 	// invoice; it only arrives with the placement request.
 	MarketplaceEndpoint string
+	// Version counts saved updates; repositories use it for optimistic locking.
+	Version int
 }
 
 func NewOrder(id, idempotencyKey string, items []Item, now time.Time) (*Order, error) {

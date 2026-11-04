@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/fabriciossouza/poc-vtex-seller-go/internal/domain"
+	"github.com/fabriciossouza/poc-vtex-seller-go/internal/ports"
 )
 
 const maxBodyBytes = 1 << 20
@@ -48,6 +49,8 @@ func writeDomainError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 	case errors.Is(err, domain.ErrOrderNotFound):
 		writeError(w, http.StatusNotFound, "order_not_found", "order not found")
+	case errors.Is(err, ports.ErrVersionConflict):
+		writeError(w, http.StatusConflict, "concurrent_modification", "order was modified concurrently, retry")
 	case errors.Is(err, domain.ErrInvalidTransition):
 		writeError(w, http.StatusConflict, "invalid_transition", err.Error())
 	default:

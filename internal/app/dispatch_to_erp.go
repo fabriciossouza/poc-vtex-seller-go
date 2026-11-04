@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/fabriciossouza/poc-vtex-seller-go/internal/domain"
@@ -19,9 +20,21 @@ func NewDispatchToERP(repo ports.OrderRepo, erp ports.ERPPort, tms ports.TMSPort
 	return &DispatchToERP{repo: repo, erp: erp, tms: tms, marketplace: marketplace}
 }
 
+// errCancelled stops the flow when a cancellation was confirmed meanwhile.
+var errCancelled = errors.New("order was cancelled")
+
 // Execute resumes from the order's current status, so a caller that retries
-// after a port failure never repeats a step that already succeeded.
+// after a port failure never repeats a step that already succeeded. A
+// cancelled order is left alone: the cancellation was already confirmed to
+// the marketplace.
 func (uc *DispatchToERP) Execute(ctx context.Context, orderID string) error {
+	if err := uc.run(ctx, orderID); err != nil && !errors.Is(err, errCancelled) {
+		return err
+	}
+	return nil
+}
+
+func (uc *DispatchToERP) run(ctx context.Context, orderID string) error {
 	order, err := uc.repo.Get(ctx, orderID)
 	if err != nil {
 		return fmt.Errorf("get order %s: %w", orderID, err)
@@ -43,6 +56,8 @@ func (uc *DispatchToERP) Execute(ctx context.Context, orderID string) error {
 			return fmt.Errorf("notify marketplace %s: %w", order.ID, err)
 		}
 		return nil
+	case domain.StatusCancelled:
+		return errCancelled
 	default:
 		return &domain.TransitionError{From: order.Status, To: domain.StatusSentToERP}
 	}
@@ -67,8 +82,22 @@ func (uc *DispatchToERP) advance(ctx context.Context, order *domain.Order, trans
 	if err := transition(); err != nil {
 		return err
 	}
-	if err := uc.repo.Save(ctx, order); err != nil {
+	err := uc.repo.Save(ctx, order)
+	if errors.Is(err, ports.ErrVersionConflict) {
+		return uc.afterConflict(ctx, order.ID, err)
+	}
+	if err != nil {
 		return fmt.Errorf("save order %s: %w", order.ID, err)
 	}
 	return nil
+}
+
+// afterConflict stops if the conflicting write was a cancellation; for any
+// other writer it reports the conflict so the caller retries from the new state.
+func (uc *DispatchToERP) afterConflict(ctx context.Context, orderID string, conflict error) error {
+	current, err := uc.repo.Get(ctx, orderID)
+	if err == nil && current.Status == domain.StatusCancelled {
+		return errCancelled
+	}
+	return fmt.Errorf("save order %s: %w", orderID, conflict)
 }
