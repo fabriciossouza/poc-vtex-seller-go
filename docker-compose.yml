@@ -1,5 +1,23 @@
 name: poc-vtex
 
+# The subnet is fixed so TRUSTED_PROXIES and INTERNAL_NETS can name addresses.
+# 172.30.0.1 is the bridge gateway: it is the address the seller sees for a
+# reverse proxy running on the host and reaching 127.0.0.1:${PORT}. Override
+# TRUSTED_PROXIES when the proxy comes from somewhere else (comma-separated
+# CIDRs); an address that is not listed cannot set X-Forwarded-For.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+          gateway: 172.30.0.1
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   seller:
     build:
@@ -11,14 +29,18 @@ services:
       ERP_URL: http://erp:8080
       TMS_URL: http://tms:8080
       MARKETPLACE_ALLOWED_HOSTS: seller:8080
-      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.30.0.1/32}
+      INTERNAL_NETS: ${INTERNAL_NETS:-172.30.0.0/24}
       RATE_LIMIT_RPS: ${RATE_LIMIT_RPS:-10}
       RATE_LIMIT_BURST: ${RATE_LIMIT_BURST:-30}
     ports:
       - "127.0.0.1:${PORT:-8094}:8080"
     tmpfs:
-      - /data:mode=0700,uid=65532,gid=65532
+      - /data:mode=0700,uid=65532,gid=65532,size=64m
     read_only: true
+    mem_limit: 256m
+    pids_limit: 128
+    logging: *logging
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     healthcheck:
@@ -43,7 +65,10 @@ services:
     user: "65534:65534"
     read_only: true
     tmpfs:
-      - /tmp
+      - /tmp:size=64m
+    mem_limit: 128m
+    pids_limit: 64
+    logging: *logging
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     healthcheck:
@@ -58,6 +83,9 @@ services:
       context: .
       target: tms-mock
     read_only: true
+    mem_limit: 64m
+    pids_limit: 64
+    logging: *logging
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     restart: unless-stopped
@@ -68,7 +96,10 @@ services:
     user: "999:999"
     read_only: true
     tmpfs:
-      - /data:uid=999,gid=999
+      - /data:uid=999,gid=999,size=64m
+    mem_limit: 128m
+    pids_limit: 64
+    logging: *logging
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     healthcheck:

@@ -55,6 +55,10 @@ paths:
         content:
           application/json:
             schema: { $ref: '#/components/schemas/PlacementRequest' }
+            example:
+              marketplaceOrderId: 1138342255777-01
+              marketplaceServicesEndpoint: http://seller:8080/demo/mkt
+              items: [{ id: '6', quantity: 1, seller: '01', price: 2499 }]
       responses:
         '200':
           description: Pedido criado (ou o já existente).
@@ -164,7 +168,7 @@ paths:
     post:
       tags: [Demo]
       summary: Recebe a nota que o seller envia (papel do marketplace)
-      description: Uma nota repetida recebe 409, como no marketplace real; o seller trata 409 como sucesso.
+      description: Uma nota repetida recebe 409, como no marketplace real; o seller trata 409 como sucesso. Só aceita chamadas da rede interna (403 para os demais) e no máximo 5 notas diferentes por pedido (429).
       parameters:
         - name: marketplaceOrderId
           in: path
@@ -183,6 +187,8 @@ paths:
                 trackingNumber: { type: string }
       responses:
         '200': { description: Nota registrada. }
+        '403': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
         '400': { $ref: '#/components/responses/Error' }
         '404': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
@@ -338,8 +344,8 @@ components:
       type: object
       required: [marketplaceOrderId, marketplaceServicesEndpoint, items]
       properties:
-        marketplaceOrderId: { type: string }
-        marketplaceServicesEndpoint: { type: string, description: 'Deve estar na allowlist do servidor.' }
+        marketplaceOrderId: { type: string, pattern: '^[A-Za-z0-9-]{1,40}$', example: 1138342255777-01 }
+        marketplaceServicesEndpoint: { type: string, example: 'http://seller:8080/demo/mkt', description: 'Deve estar na allowlist do servidor. Use o simulador desta demo para o Try it out funcionar.' }
         items:
           type: array
           maxItems: 50

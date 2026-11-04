@@ -93,10 +93,10 @@ A regra de dependência é verificada por teste: [`internal/hexagonal_test.go`](
 | Retry com backoff e jitter | `internal/platform/resilience/retry.go` | Backoff exponencial limitado por `MaxDelay`, com jitter entre 50% e 100% do atraso. Só repete erro transitório (5xx, timeout, conexão); 4xx é permanente. Padrão: 4 tentativas, base de 200 ms. |
 | Circuit breaker | `internal/platform/resilience/breaker.go` | Fechado, aberto e meio-aberto, com estado observável. Abre após 3 falhas transitórias seguidas, rejeita por 8 s e deixa passar uma chamada de teste. |
 | DLQ e replay | `internal/adapters/queue/bus.go`, `internal/platform/worker/worker.go` | Esgotadas as tentativas, o evento vai para um stream de DLQ com motivo, número de tentativas e horário. `ReplayDLQ` reprocessa pelo mesmo retry e breaker, é serializado e descarta cartas malformadas ou de pedido em estado terminal. Mensagens sem ack são reassumidas por outro consumidor depois de `ClaimIdle`. |
-| Rate limit | `internal/platform/ratelimit` | Token bucket por IP (padrão 10 req/s, rajada de 30), 429 com `Retry-After`. O cabeçalho `X-Forwarded-For` só vale vindo de proxy confiável (`TRUSTED_PROXIES`). |
+| Rate limit | `internal/platform/ratelimit` | Token bucket por IP (padrão 10 req/s, rajada de 30), 429 com `Retry-After`. IPv6 é agrupado por /64 e o mapa de clientes tem teto de 10 mil chaves. O cabeçalho `X-Forwarded-For` só vale vindo de proxy confiável (`TRUSTED_PROXIES`); se esse proxy mandar um valor inválido, a resposta é 400, nunca o balde compartilhado do proxy. O retorno interno da nota (`/demo/mkt/`) não conta no limite, mas só quando vem direto da rede interna (`INTERNAL_NETS`) e sem cabeçalho de proxy. |
 | Quality gates | `.github/workflows/ci.yml`, `.golangci.yml` | `go test -race` com cobertura mínima, golangci-lint (govet, errcheck, staticcheck, ineffassign, unused, gosec), gosec com SARIF, govulncheck, gitleaks, integração com Redis 7 e teste do mock PHP. |
-| Observabilidade | `internal/platform/observability` | Log JSON estruturado por requisição, métricas Prometheus por rota em `/metrics` (inclui estado do breaker e tamanho da DLQ) e `/healthz` que consulta o Redis. |
-| Defesas de entrada | `internal/adapters/marketplace/client.go`, `internal/adapters/http` | O `marketplaceServicesEndpoint` vem do chamador e só é aceito se o host estiver na allowlist (proteção contra SSRF); sem redirect. Limite de 50 itens e de tamanho de corpo. |
+| Observabilidade | `internal/platform/observability` | Log JSON estruturado por requisição, métricas Prometheus por rota em `/metrics` (o rótulo de rota é o padrão do mux e métodos fora da lista padrão viram `OTHER`, para a cardinalidade ser finita; inclui estado do breaker e tamanho da DLQ por `XLEN`) e `/healthz` que consulta o Redis. |
+| Defesas de entrada | `internal/adapters/marketplace/client.go`, `internal/adapters/http`, `internal/domain/order.go` | O `marketplaceServicesEndpoint` vem do chamador e só é aceito se o host estiver na allowlist (proteção contra SSRF); sem redirect. `marketplaceOrderId` e SKU seguem `[A-Za-z0-9-]` com 40 e 20 caracteres no máximo (pontos e barras são recusados). Limite de 50 itens e de tamanho de corpo. O domínio recusa quantidade não positiva, preço negativo e overflow do total. |
 
 Os contratos entre o seller, o ERP, o TMS e a fila estão em [`docs/contratos-internos.md`](docs/contratos-internos.md).
 
@@ -123,7 +123,14 @@ make test-integration  # fila contra um Redis real
 make down   # derruba tudo e limpa o estado
 ```
 
-A porta é publicada só em `127.0.0.1` (variável `PORT`). Os contêineres rodam com sistema de arquivos somente leitura, sem capabilities e com o estado em tmpfs. As variáveis de ambiente do seller estão em [`cmd/seller/config.go`](cmd/seller/config.go).
+A porta é publicada só em `127.0.0.1` (variável `PORT`). Os contêineres rodam com sistema de arquivos somente leitura, sem capabilities, com o estado em tmpfs de 64 MB, limites de memória e de processos e logs rotacionados (10 MB, 3 arquivos). As variáveis de ambiente do seller estão em [`cmd/seller/config.go`](cmd/seller/config.go).
+
+A rede do compose tem sub-rede fixa (`172.30.0.0/24`, gateway `172.30.0.1`). Duas variáveis dependem dela:
+
+- `TRUSTED_PROXIES` (padrão `172.30.0.1/32`): CIDRs de proxies reversos cujo `X-Forwarded-For` é aceito para identificar o cliente. O padrão é o gateway da ponte, que é o endereço que o seller enxerga quando um proxy no host acessa `127.0.0.1:${PORT}`. Sem isso, todos os visitantes dividem o limite do proxy.
+- `INTERNAL_NETS` (padrão `172.30.0.0/24`): redes de onde `/demo/mkt/` (o retorno da nota) é aceito e isento do limite, desde que a requisição não tenha passado por proxy.
+
+Exemplo com outro proxy: `TRUSTED_PROXIES=172.30.0.1/32,10.1.0.0/16 make up`.
 
 ## Rollout Blue/Green e Canary em produção
 
@@ -149,6 +156,10 @@ Isto não está implementado neste repositório; é o plano que seria seguido.
 
 - A simulação repete a cotação de frete por item, em vez de agrupar por SLA e destino.
 - O SLA de entrega é fixo (cotação do TMS mock com prazo constante).
+- Reset, derrubar o ERP e cancelar pedidos afetam todos os visitantes ao mesmo tempo; a demo é compartilhada e não há isolamento por sessão.
+- O `price` do placement não é conferido com o catálogo do seller; o valor enviado pelo marketplace é gravado como veio.
+- Com o breaker aberto, o worker não tenta o ERP e manda as mensagens novas direto para a DLQ com o motivo. É o comportamento mostrado no cenário 2, e o reprocessamento depende de o breaker voltar a testar.
+- `/metrics` é público nesta demo, sem autenticação. Os rótulos têm cardinalidade limitada e as métricas não trazem dados de pedido.
 - Os endpoints `/pvt` não têm autenticação nesta demo. Em produção, o marketplace se autenticaria (por exemplo com as chaves da VTEX) e a rede restringiria a origem.
 - Existe um único circuit breaker para todas as dependências (ERP, TMS e notificação ao marketplace). Uma dependência lenta abre o breaker para as outras.
 - A nota é reenviada quando o evento é reentregue; o marketplace responde 409 e o seller trata como sucesso.

@@ -4,7 +4,7 @@ Contratos entre o seller e os servicos que ele chama: ERP (SAP-Adapter), TMS e a
 
 Regras comuns dos clientes HTTP:
 
-- Timeout padrao de 5 s por chamada (configuravel pelo `*http.Client` injetado).
+- Timeout efetivo de 3 s por chamada (`DEPENDENCY_TIMEOUT`, aplicado ao `*http.Client` injetado).
 - Corpo e resposta em JSON, `Content-Type: application/json`.
 - Status 2xx e sucesso. Status 5xx e erro transitorio (o worker repete). Qualquer outro e erro permanente (nao repete). Erro de conexao e timeout tambem sao transitorios.
 - Chamadas que criam algo levam o header `Idempotency-Key` com o id do pedido do seller. O servico deve devolver o mesmo resultado para a mesma chave.
@@ -60,6 +60,8 @@ O `marketplaceServicesEndpoint` vem no body do placement, controlado por quem ch
 - Retry: backoff exponencial (`BaseDelay` dobra a cada falha, limitado por `MaxDelay`) com jitter entre 50% e 100% do atraso. So repete erro transitorio, ate `MaxAttempts`.
 - Circuit breaker: abre apos `FailureThreshold` falhas transitorias seguidas, rejeita chamadas por `OpenTimeout`, depois deixa uma chamada de teste passar (meio-aberto). Erro permanente (4xx) conta como dependencia saudavel.
 - O breaker e unico para o despacho inteiro (ERP, TMS e notificacao ao marketplace).
+- `ErrVersionConflict` (disputa no nosso banco) e uma execucao que nao chamou ninguem (pedido ja cancelado, `ports.ErrNothingDispatched`) sao neutros para o breaker: nao contam como falha e nao fecham um breaker meio-aberto. O conflito ainda e repetido pelo retry.
+- O despacho de um mesmo pedido e serializado por chave entre o consumidor e o replay.
 - DLQ guarda o motivo e o numero de tentativas; o replay passa pelo mesmo retry e breaker.
 
 ## Concorrencia e replay
