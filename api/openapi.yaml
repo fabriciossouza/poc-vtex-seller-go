@@ -59,6 +59,8 @@ paths:
               marketplaceOrderId: 1138342255777-01
               marketplaceServicesEndpoint: http://seller:8080/demo/mkt
               items: [{ id: '6', quantity: 1, seller: '01', price: 2499 }]
+              shippingData:
+                logisticsInfo: [{ itemIndex: 0, price: 1099 }]
       responses:
         '200':
           description: Pedido criado (ou o já existente).
@@ -100,7 +102,9 @@ paths:
       description: |
         Responde 404 quando `marketplaceOrderId` não é o do pedido. Pedido `received` ou `authorized` é
         cancelado na hora (200 com recibo). Pedido já enviado ao ERP ou despachado não muda: a resposta é
-        200 vazia, que no protocolo significa "em avaliação", e a nota enviada depois é a recusa.
+        200 vazia, que no protocolo significa "em avaliação", e a nota enviada depois é a recusa. O 200 tem
+        dois formatos: com recibo (JSON, esquema `Receipt`) quando o cancelamento é confirmado, e sem corpo e
+        sem content-type quando está em avaliação. Repetir o cancelamento de um pedido já cancelado devolve o recibo.
       parameters:
         - { $ref: '#/components/parameters/SellerOrderId' }
       requestBody:
@@ -361,6 +365,17 @@ components:
               quantity: { type: integer }
               seller: { type: string }
               price: { type: integer, description: Centavos. }
+        shippingData:
+          type: object
+          description: O frete do SLA escolhido (soma dos `price`) é gravado no pedido e entra no `invoiceValue` da nota.
+          properties:
+            logisticsInfo:
+              type: array
+              items:
+                type: object
+                properties:
+                  itemIndex: { type: integer }
+                  price: { type: integer, minimum: 0, description: Centavos. }
     PlacementResponse:
       type: object
       properties:
