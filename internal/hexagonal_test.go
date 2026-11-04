@@ -14,13 +14,19 @@ import (
 
 const modulePrefix = "github.com/fabriciossouza/poc-vtex-seller-go/internal/"
 
-// allowed lists, per layer, the internal packages it may import.
+// allowed lists, per layer, the internal packages it may import. A layer
+// applies to every package under it unless a more specific layer is listed.
 var allowed = map[string][]string{
 	"domain": {},
 	"ports":  {"domain"},
 	"app":    {"domain", "ports"},
-	// adapters/* may not import each other or app: they are wired in main.
+	// Driven adapters may not import each other or app: they are wired in main.
 	"adapters": {"domain", "ports"},
+	// The HTTP adapter drives the application, so it calls the use cases.
+	"adapters/http": {"domain", "ports", "app"},
+	// Platform code is wired in main; domain, ports and app never import it.
+	"platform":            {"domain", "ports", "app", "platform/resilience"},
+	"platform/resilience": {},
 }
 
 func TestLayersOnlyImportAllowedInternalPackages(t *testing.T) {
@@ -30,7 +36,7 @@ func TestLayersOnlyImportAllowedInternalPackages(t *testing.T) {
 			t.Fatalf("no sources found for layer %s", layer)
 		}
 		for _, file := range files {
-			if strings.HasSuffix(file, "_test.go") {
+			if strings.HasSuffix(file, "_test.go") || mostSpecificLayer(file) != layer {
 				continue
 			}
 			src, err := os.ReadFile(file)
@@ -53,6 +59,16 @@ func TestLayersOnlyImportAllowedInternalPackages(t *testing.T) {
 			}
 		}
 	}
+}
+
+func mostSpecificLayer(file string) string {
+	best := ""
+	for layer := range allowed {
+		if strings.HasPrefix(file, layer+"/") && len(layer) > len(best) {
+			best = layer
+		}
+	}
+	return best
 }
 
 func goSources(t *testing.T, layer string) []string {
