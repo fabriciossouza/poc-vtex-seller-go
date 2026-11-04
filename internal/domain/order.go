@@ -35,8 +35,9 @@ func (e *TransitionError) Error() string {
 func (e *TransitionError) Is(target error) bool { return target == ErrInvalidTransition }
 
 type Item struct {
-	SKU      string
-	Quantity int
+	SKU        string
+	Quantity   int
+	PriceCents int64
 }
 
 type Order struct {
@@ -46,6 +47,9 @@ type Order struct {
 	Status         OrderStatus
 	TrackingCode   string
 	CreatedAt      time.Time
+	// MarketplaceEndpoint is where the marketplace expects this order's
+	// invoice; it only arrives with the placement request.
+	MarketplaceEndpoint string
 }
 
 func NewOrder(id, idempotencyKey string, items []Item, now time.Time) (*Order, error) {

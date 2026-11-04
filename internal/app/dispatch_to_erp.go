@@ -39,7 +39,7 @@ func (uc *DispatchToERP) Execute(ctx context.Context, orderID string) error {
 		}
 		fallthrough
 	case domain.StatusShipped:
-		if err := uc.marketplace.NotifyInvoice(ctx, order.ID, order.TrackingCode); err != nil {
+		if err := uc.marketplace.NotifyInvoice(ctx, *order); err != nil {
 			return fmt.Errorf("notify marketplace %s: %w", order.ID, err)
 		}
 		return nil

@@ -13,6 +13,8 @@ type PlaceOrderCommand struct {
 	OrderID        string
 	IdempotencyKey string
 	Items          []domain.Item
+
+	MarketplaceEndpoint string
 }
 
 type PlaceOrder struct {
@@ -37,6 +39,7 @@ func (uc *PlaceOrder) Execute(ctx context.Context, cmd PlaceOrderCommand) (*doma
 	if err != nil {
 		return nil, err
 	}
+	order.MarketplaceEndpoint = cmd.MarketplaceEndpoint
 	if err := uc.repo.Save(ctx, order); err != nil {
 		return nil, fmt.Errorf("save order: %w", err)
 	}

@@ -24,8 +24,10 @@ type TMSPort interface {
 	CreateShipment(ctx context.Context, order domain.Order) (trackingCode string, err error)
 }
 
+// MarketplacePort notifies the invoice of a shipped order. The marketplace
+// order id is order.IdempotencyKey. Repeated notifications must be tolerated.
 type MarketplacePort interface {
-	NotifyInvoice(ctx context.Context, orderID, trackingCode string) error
+	NotifyInvoice(ctx context.Context, order domain.Order) error
 }
 
 // OrderRepo implementations return domain.ErrOrderNotFound from Get and
