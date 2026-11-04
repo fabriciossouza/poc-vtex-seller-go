@@ -39,6 +39,25 @@ func TestPlacementMatchesTheContractAndStoresTheOrder(t *testing.T) {
 		stored.Status != domain.StatusReceived || stored.Items[0] != (domain.Item{SKU: "6", Quantity: 1, PriceCents: 2499}) {
 		t.Errorf("stored = %+v", stored)
 	}
+	if stored.FreightCents != 1099 {
+		t.Errorf("FreightCents = %d, want the 1099 of the selected SLA", stored.FreightCents)
+	}
+}
+
+func TestPlacementRejectsAFreightThatIsNegativeOrOverflows(t *testing.T) {
+	for _, prices := range [][]any{{-1}, {9223372036854775807, 1}} {
+		e := newEnv(t, nil)
+		body := readJSONFile(t, "order_placement_request.json")
+		info := make([]any, len(prices))
+		for i, p := range prices {
+			info[i] = map[string]any{"itemIndex": i, "selectedSla": "Express", "price": p}
+		}
+		body["shippingData"].(map[string]any)["logisticsInfo"] = info
+
+		if status, got := e.post(t, "/pvt/orders", body); status != http.StatusBadRequest {
+			t.Errorf("prices %v: status = %d, want 400, body = %v", prices, status, got)
+		}
+	}
 }
 
 func TestPlacementIsIdempotentByMarketplaceOrderID(t *testing.T) {

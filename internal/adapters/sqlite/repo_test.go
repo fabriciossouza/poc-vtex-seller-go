@@ -265,3 +265,22 @@ func TestSaveWithAnIDOfAnotherOrderFailsAndLeavesTheStoredOrderUntouched(t *test
 		t.Fatalf("stored order was changed: %+v", got)
 	}
 }
+
+func TestFreightSurvivesSaveAndGet(t *testing.T) {
+	ctx := context.Background()
+	repo := openRepo(t)
+	order := newOrder(t, "ord-1", "mkt-1")
+	order.FreightCents = 1099
+	if err := repo.Save(ctx, order); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	got, err := repo.Get(ctx, "ord-1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	if got.FreightCents != 1099 {
+		t.Fatalf("FreightCents = %d, want 1099", got.FreightCents)
+	}
+}

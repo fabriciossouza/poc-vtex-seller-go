@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -193,5 +194,24 @@ func TestValidateEndpointAcceptsOnlyAllowedHostsAndNeverEchoesTheValue(t *testin
 	notifyErr := client.NotifyInvoice(context.Background(), shippedOrder(secret))
 	if notifyErr == nil || strings.Contains(notifyErr.Error(), "s3cret") {
 		t.Errorf("NotifyInvoice error = %v", notifyErr)
+	}
+}
+
+func TestNotifyInvoiceAddsTheFreightToTheInvoiceValueAsInTheContractExample(t *testing.T) {
+	client, rec, endpoint := setup(t)
+	order := shippedOrder(endpoint)
+	order.Items[0].Quantity = 1
+	order.FreightCents = 1099
+
+	if err := client.NotifyInvoice(context.Background(), order); err != nil {
+		t.Fatalf("NotifyInvoice: %v", err)
+	}
+
+	body, contract := rec.bodies[0], contractKeys(t)
+	if body["invoiceValue"] != contract["invoiceValue"] {
+		t.Errorf("invoiceValue = %v, contract example = %v", body["invoiceValue"], contract["invoiceValue"])
+	}
+	if got, want := body["items"], contract["items"]; !reflect.DeepEqual(got, want) {
+		t.Errorf("items = %v, contract example = %v", got, want)
 	}
 }

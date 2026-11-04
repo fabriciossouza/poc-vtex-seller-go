@@ -133,3 +133,16 @@ func TestNewOrderRejectsNegativePricesAndOverflowingTotals(t *testing.T) {
 		t.Fatalf("a free item is valid: %v", err)
 	}
 }
+
+func TestSetFreightRejectsNegativeValuesAndOverflowingTotals(t *testing.T) {
+	o, _ := domain.NewOrder("ord-1", "key-1", []domain.Item{{SKU: "a", Quantity: 1, PriceCents: math.MaxInt64 - 10}}, now)
+
+	if err := o.SetFreight(10); err != nil || o.FreightCents != 10 {
+		t.Fatalf("SetFreight(10) = %v, freight = %d", err, o.FreightCents)
+	}
+	for _, cents := range []int64{-1, 11} {
+		if err := o.SetFreight(cents); !errors.Is(err, domain.ErrInvalidOrder) {
+			t.Errorf("SetFreight(%d) = %v, want ErrInvalidOrder", cents, err)
+		}
+	}
+}
