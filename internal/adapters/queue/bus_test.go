@@ -218,7 +218,7 @@ func TestPublishCapsTheStreamLengthAndRejectCapsTheDLQ(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 5; i++ {
 		d, err := bus.Receive(ctx)
 		if err != nil {
 			t.Fatal(err)

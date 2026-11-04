@@ -27,6 +27,10 @@ type Config struct {
 	// the worst-case processing time of one message (MaxAttempts x (call
 	// timeout + MaxDelay)); otherwise a slow message is processed twice.
 	ClaimIdle time.Duration
+	// MaxLen and DLQMaxLen cap the streams (approximately, as Redis trims by
+	// whole nodes) so they cannot grow forever; they default to 10000 and 1000.
+	MaxLen    int64
+	DLQMaxLen int64
 	Now       func() time.Time
 }
 
@@ -49,19 +53,48 @@ func New(ctx context.Context, client redis.Cmdable, cfg Config) (*Bus, error) {
 	if cfg.Block <= 0 {
 		cfg.Block = time.Second
 	}
+	if cfg.MaxLen <= 0 {
+		cfg.MaxLen = 10000
+	}
+	if cfg.DLQMaxLen <= 0 {
+		cfg.DLQMaxLen = 1000
+	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	err := client.XGroupCreateMkStream(ctx, cfg.Stream, cfg.Group, "0").Err()
-	if err != nil && !strings.HasPrefix(err.Error(), "BUSYGROUP") {
-		return nil, fmt.Errorf("create consumer group: %w", err)
+	b := &Bus{client: client, cfg: cfg}
+	if err := b.ensureGroup(ctx); err != nil {
+		return nil, err
 	}
-	return &Bus{client: client, cfg: cfg}, nil
+	return b, nil
+}
+
+func (b *Bus) ensureGroup(ctx context.Context) error {
+	err := b.client.XGroupCreateMkStream(ctx, b.cfg.Stream, b.cfg.Group, "0").Err()
+	if err != nil && !strings.HasPrefix(err.Error(), "BUSYGROUP") {
+		return fmt.Errorf("create consumer group: %w", err)
+	}
+	return nil
+}
+
+// Reset empties the stream and the DLQ and recreates the consumer group. It
+// exists for the periodic demo cleanup; a consumer blocked on the old stream
+// gets an error once and carries on against the new one.
+func (b *Bus) Reset(ctx context.Context) error {
+	if err := b.client.Del(ctx, b.cfg.Stream, b.cfg.DLQ).Err(); err != nil {
+		return fmt.Errorf("reset streams: %w", err)
+	}
+	b.mu.Lock()
+	b.pendingRead = false
+	b.mu.Unlock()
+	return b.ensureGroup(ctx)
 }
 
 func (b *Bus) Publish(ctx context.Context, event domain.Event) error {
 	err := b.client.XAdd(ctx, &redis.XAddArgs{
 		Stream: b.cfg.Stream,
+		MaxLen: b.cfg.MaxLen,
+		Approx: true,
 		Values: map[string]any{"type": string(event.Type), "order_id": event.OrderID},
 	}).Err()
 	if err != nil {
@@ -102,6 +135,8 @@ func (b *Bus) Reject(ctx context.Context, delivery ports.Delivery, reason string
 	pipe := b.client.TxPipeline()
 	pipe.XAdd(ctx, &redis.XAddArgs{
 		Stream: b.cfg.DLQ,
+		MaxLen: b.cfg.DLQMaxLen,
+		Approx: true,
 		Values: map[string]any{
 			"type":      string(delivery.Event.Type),
 			"order_id":  delivery.Event.OrderID,

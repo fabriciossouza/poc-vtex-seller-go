@@ -60,6 +60,13 @@ func (b *Breaker) Snapshot() Snapshot {
 	return Snapshot{State: b.state, ConsecutiveFailures: b.failures, OpenedAt: b.openedAt}
 }
 
+// Reset closes the circuit and forgets past failures.
+func (b *Breaker) Reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.state, b.failures, b.probing, b.openedAt = StateClosed, 0, false, time.Time{}
+}
+
 // promote moves open to half-open once the timeout has elapsed.
 func (b *Breaker) promote() {
 	if b.state == StateOpen && !b.now().Before(b.openedAt.Add(b.cfg.OpenTimeout)) {

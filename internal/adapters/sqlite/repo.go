@@ -52,6 +52,14 @@ func Open(path string) (*Repo, error) {
 
 func (r *Repo) Close() error { return r.db.Close() }
 
+// Reset deletes every order; it exists for the periodic demo cleanup.
+func (r *Repo) Reset(ctx context.Context) error {
+	if _, err := r.db.ExecContext(ctx, `DELETE FROM orders`); err != nil {
+		return fmt.Errorf("reset orders: %w", err)
+	}
+	return nil
+}
+
 // Save inserts a new order or updates an existing one if its version still
 // matches the stored one (optimistic locking), returning
 // ports.ErrVersionConflict otherwise.
