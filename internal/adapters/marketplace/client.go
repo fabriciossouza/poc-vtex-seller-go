@@ -107,10 +107,27 @@ func (c *Client) NotifyInvoice(ctx context.Context, order domain.Order) error {
 	return &ports.StatusError{Service: "marketplace", StatusCode: resp.StatusCode}
 }
 
-func (c *Client) invoiceURL(order domain.Order) (string, error) {
-	u, err := url.Parse(order.MarketplaceEndpoint)
+// ValidateEndpoint lets the placement handler refuse a bad endpoint up front.
+func (c *Client) ValidateEndpoint(raw string) error {
+	_, err := c.parseEndpoint(raw)
+	return err
+}
+
+// parseEndpoint never puts the raw value in the error: it is caller-controlled
+// and ends up in logs and in the DLQ reason.
+func (c *Client) parseEndpoint(raw string) (*url.URL, error) {
+	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || !c.allowed[strings.ToLower(u.Host)] {
-		return "", fmt.Errorf("%w: %q", ErrEndpointNotAllowed, order.MarketplaceEndpoint)
+		return nil, ErrEndpointNotAllowed
 	}
-	return strings.TrimRight(u.String(), "/") + "/pvt/orders/" + url.PathEscape(order.IdempotencyKey) + "/invoice", nil
+	return u, nil
+}
+
+func (c *Client) invoiceURL(order domain.Order) (string, error) {
+	u, err := c.parseEndpoint(order.MarketplaceEndpoint)
+	if err != nil {
+		return "", err
+	}
+	u.Fragment = ""
+	return u.JoinPath("pvt", "orders", url.PathEscape(order.IdempotencyKey), "invoice").String(), nil
 }

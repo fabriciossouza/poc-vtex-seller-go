@@ -45,11 +45,12 @@ Resposta sem `trackingCode` e tratada como erro.
 
 `POST {marketplaceServicesEndpoint}/pvt/orders/{marketplaceOrderId}/invoice`, corpo no formato de `testdata/invoice_request.json`. O `invoiceNumber` e `INV-{orderId}`, estavel por pedido, entao uma notificacao repetida e a mesma nota; `409` e tratado como sucesso.
 
-O `marketplaceServicesEndpoint` vem no body do placement, controlado por quem chama. O cliente so conecta em hosts da allowlist (`AllowedHosts`, `host[:port]`), nao segue redirect e so aceita `http`/`https`. Lista vazia recusa tudo.
+O `marketplaceServicesEndpoint` vem no body do placement, controlado por quem chama. O cliente so conecta em hosts da allowlist (`AllowedHosts`, `host[:port]`), nao segue redirect e so aceita `http`/`https`. Lista vazia recusa tudo. O mesmo teste roda no placement (400) e a mensagem de erro nunca repete a URL recebida. Query string e prefixo de caminho do endpoint sao preservados.
 
 ## Fila (Redis Streams)
 
 - Stream de eventos: campos `type` e `order_id`. Consumer group com ack; mensagem sem ack por mais de `ClaimIdle` pode ser assumida por outro consumidor do grupo.
+- `ClaimIdle` e obrigatorio e deve superar `MaxAttempts x (timeout + MaxDelay)`, senao uma mensagem lenta e processada duas vezes. Na partida, o consumidor le primeiro as proprias pendentes.
 - Ack e rejeicao removem a mensagem do stream.
 - DLQ: stream separado, campos `type`, `order_id`, `reason`, `attempts`, `failed_at`, `source_id`. Mensagem malformada vai para a DLQ com `attempts` 0.
 - `Discard` remove da DLQ depois do reprocessamento.
@@ -60,3 +61,10 @@ O `marketplaceServicesEndpoint` vem no body do placement, controlado por quem ch
 - Circuit breaker: abre apos `FailureThreshold` falhas transitorias seguidas, rejeita chamadas por `OpenTimeout`, depois deixa uma chamada de teste passar (meio-aberto). Erro permanente (4xx) conta como dependencia saudavel.
 - O breaker e unico para o despacho inteiro (ERP, TMS e notificacao ao marketplace).
 - DLQ guarda o motivo e o numero de tentativas; o replay passa pelo mesmo retry e breaker.
+
+## Concorrencia e replay
+
+- `Order.Version` implementa bloqueio otimista: `Save` de uma versao antiga devolve `ports.ErrVersionConflict` (HTTP 409, transitorio para o retry). Se o conflito veio de um cancelamento, o despacho para sem erro.
+- `fulfill` repetido e idempotente: pedido `authorized` publica o evento de novo e responde 200.
+- `ReplayDLQ` e serializado. Cartas malformadas, de pedido inexistente ou em estado terminal sao descartadas; as demais ficam na DLQ.
+- Simulacao e placement aceitam no maximo 50 itens.

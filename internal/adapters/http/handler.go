@@ -28,7 +28,10 @@ type Deps struct {
 	Place    OrderPlacer
 	Fulfill  OrderAction
 	Cancel   OrderAction
-	Clock    ports.Clock
+	// ValidateEndpoint vets the marketplaceServicesEndpoint of a placement; the
+	// value is caller-controlled, so a nil validator refuses every placement.
+	ValidateEndpoint func(endpoint string) error
+	Clock            ports.Clock
 	// NewID generates seller order ids and receipts.
 	NewID func() string
 }
@@ -42,5 +45,8 @@ func NewHandler(d Deps) http.Handler {
 	mux.HandleFunc("POST /pvt/orders/{sellerOrderId}/cancel", h.cancel)
 	return mux
 }
+
+// maxItems bounds the work one request can ask for.
+const maxItems = 50
 
 type handler struct{ Deps }

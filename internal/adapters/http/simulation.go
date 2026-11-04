@@ -58,8 +58,8 @@ func (h *handler) simulate(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	if len(req.Items) == 0 {
-		writeError(w, http.StatusBadRequest, "invalid_request", "items are required")
+	if len(req.Items) == 0 || len(req.Items) > maxItems {
+		writeError(w, http.StatusBadRequest, "invalid_request", fmt.Sprintf("between 1 and %d items are required", maxItems))
 		return
 	}
 	items := make([]domain.Item, len(req.Items))

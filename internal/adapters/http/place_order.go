@@ -1,6 +1,7 @@
 package httpadapter
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/fabriciossouza/poc-vtex-seller-go/internal/app"
@@ -35,6 +36,14 @@ func (h *handler) placeOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.MarketplaceOrderID == "" {
 		writeError(w, http.StatusBadRequest, "invalid_request", "marketplaceOrderId is required")
+		return
+	}
+	if len(req.Items) > maxItems {
+		writeError(w, http.StatusBadRequest, "invalid_request", fmt.Sprintf("at most %d items are accepted", maxItems))
+		return
+	}
+	if h.ValidateEndpoint == nil || h.ValidateEndpoint(req.MarketplaceServicesEndpoint) != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "marketplaceServicesEndpoint is not allowed")
 		return
 	}
 	items := make([]domain.Item, len(req.Items))
