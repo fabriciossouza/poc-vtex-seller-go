@@ -150,7 +150,7 @@ func (c *Controller) createOrder(w http.ResponseWriter, r *http.Request) {
 	mid, ctx := req.MarketplaceOrderID, r.Context()
 
 	_, duplicate := c.Timeline.SellerOrderID(mid)
-	price, simulation, err := c.simulate(ctx, req)
+	price, freight, simulation, err := c.simulate(ctx, req)
 	if err != nil {
 		slog.Error("demo: simulation failed", "error", err)
 		writeError(w, http.StatusBadGateway, "simulation_failed", "the seller did not answer the simulation")
@@ -160,6 +160,7 @@ func (c *Controller) createOrder(w http.ResponseWriter, r *http.Request) {
 		"marketplaceOrderId":          mid,
 		"marketplaceServicesEndpoint": c.Endpoint,
 		"items":                       []map[string]any{{"id": req.SKU, "quantity": req.Quantity, "seller": "1", "price": price}},
+		"shippingData":                map[string]any{"logisticsInfo": []map[string]any{{"itemIndex": 0, "price": freight}}},
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "internal error")
@@ -192,14 +193,14 @@ func (c *Controller) createOrder(w http.ResponseWriter, r *http.Request) {
 }
 
 // simulate asks the seller for price and stock, as the marketplace does
-// before placing an order, and returns the unit price quoted.
-func (c *Controller) simulate(ctx context.Context, req orderRequest) (int64, string, error) {
+// before placing an order, and returns the unit price and the freight quoted.
+func (c *Controller) simulate(ctx context.Context, req orderRequest) (int64, int64, string, error) {
 	status, body, err := c.callSeller(ctx, http.MethodPost, "/pvt/orderForms/simulation", map[string]any{
 		"postalCode": "01310-100", "country": "BRA",
 		"items": []map[string]any{{"id": req.SKU, "quantity": req.Quantity, "seller": "1"}},
 	})
 	if err != nil {
-		return 0, "", err
+		return 0, 0, "", err
 	}
 	var sim struct {
 		Items         []struct{ Price int64 } `json:"items"`
@@ -208,13 +209,14 @@ func (c *Controller) simulate(ctx context.Context, req orderRequest) (int64, str
 		} `json:"logisticsInfo"`
 	}
 	if status != http.StatusOK || json.Unmarshal(body, &sim) != nil || len(sim.Items) == 0 || len(sim.LogisticsInfo) == 0 {
-		return 0, "", fmt.Errorf("simulation answered status %d", status)
+		return 0, 0, "", fmt.Errorf("simulation answered status %d", status)
 	}
-	message := "simulação: sem estoque suficiente para este SKU"
+	message, freight := "simulação: sem estoque suficiente para este SKU", int64(0)
 	if len(sim.LogisticsInfo[0].SLAs) > 0 {
-		message = fmt.Sprintf("simulação: preço %s, frete %s", money(sim.Items[0].Price), money(sim.LogisticsInfo[0].SLAs[0].Price))
+		freight = sim.LogisticsInfo[0].SLAs[0].Price
+		message = fmt.Sprintf("simulação: preço %s, frete %s", money(sim.Items[0].Price), money(freight))
 	}
-	return sim.Items[0].Price, message, nil
+	return sim.Items[0].Price, freight, message, nil
 }
 
 func (c *Controller) fulfill(w http.ResponseWriter, r *http.Request) {
@@ -256,6 +258,7 @@ func (c *Controller) receiveInvoice(w http.ResponseWriter, r *http.Request) {
 	var inv struct {
 		InvoiceNumber  string `json:"invoiceNumber"`
 		TrackingNumber string `json:"trackingNumber"`
+		InvoiceValue   int64  `json:"invoiceValue"`
 	}
 	if !decodeBody(w, r, &inv) {
 		return
@@ -281,7 +284,7 @@ func (c *Controller) receiveInvoice(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "invoice_exists", "invoice already received")
 		return
 	}
-	c.Timeline.Add(mid, "marketplace", OK, fmt.Sprintf("marketplace recebeu a nota %s com o rastreio %s", inv.InvoiceNumber, inv.TrackingNumber))
+	c.Timeline.Add(mid, "marketplace", OK, fmt.Sprintf("marketplace recebeu a nota %s com o rastreio %s, valor %s", inv.InvoiceNumber, inv.TrackingNumber, money(inv.InvoiceValue)))
 	writeJSON(w, http.StatusOK, map[string]string{"invoiceNumber": inv.InvoiceNumber})
 }
 
