@@ -404,3 +404,47 @@ func TestRunProcessesMessagesUntilTheContextIsCancelled(t *testing.T) {
 		t.Fatalf("status = %s", e.status(t))
 	}
 }
+
+func TestShutdownDuringDispatchLeavesTheMessagePendingInsteadOfDeadLettering(t *testing.T) {
+	e := newEnv(t)
+	e.consumer.push(e.authorized("ord-1"))
+	ctx, cancel := context.WithCancel(context.Background())
+	e.worker = worker.New(e.consumer, cancelOnCall{cancel: cancel}, resilience.NewRetrier(
+		resilience.RetryConfig{MaxAttempts: 5, BaseDelay: time.Second, MaxDelay: time.Second}, ctxSleeper{}, nil), e.breaker)
+
+	err := e.worker.ProcessNext(ctx)
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if len(e.consumer.dlq) != 0 || len(e.consumer.acked) != 0 {
+		t.Fatalf("dlq = %v, acked = %v; an interrupted message must stay pending for redelivery", e.consumer.dlq, e.consumer.acked)
+	}
+}
+
+type cancelOnCall struct {
+	cancel context.CancelFunc
+}
+
+func (c cancelOnCall) Execute(context.Context, string) error {
+	c.cancel()
+	return &ports.StatusError{Service: "erp", StatusCode: 503}
+}
+
+type ctxSleeper struct{}
+
+func (ctxSleeper) Sleep(ctx context.Context, _ time.Duration) error { return ctx.Err() }
+
+func TestShutdownDuringReplayStopsAndKeepsTheLetter(t *testing.T) {
+	e := newEnv(t)
+	e.consumer.dlq = []ports.DeadLetter{{ID: "dl-1", Event: e.authorized("ord-1"), Reason: "x", Attempts: 4}}
+	ctx, cancel := context.WithCancel(context.Background())
+	e.worker = worker.New(e.consumer, cancelOnCall{cancel: cancel}, resilience.NewRetrier(
+		resilience.RetryConfig{MaxAttempts: 5, BaseDelay: time.Second, MaxDelay: time.Second}, ctxSleeper{}, nil), e.breaker)
+
+	_, err := e.worker.ReplayDLQ(ctx)
+
+	if !errors.Is(err, context.Canceled) || len(e.consumer.dlq) != 1 {
+		t.Fatalf("err = %v, dlq = %v", err, e.consumer.dlq)
+	}
+}
