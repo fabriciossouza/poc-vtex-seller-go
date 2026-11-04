@@ -48,7 +48,8 @@ func TestRetrierBacksOffExponentiallyUpToMaxDelayAndStopsAtMaxAttempts(t *testin
 	if attempts != 5 || calls != 5 {
 		t.Fatalf("attempts = %d, calls = %d; want 5", attempts, calls)
 	}
-	if !errors.Is(err, err) || err == nil {
+	var last transientErr
+	if !errors.As(err, &last) {
 		t.Fatalf("err = %v, want the last transient error", err)
 	}
 	want := []time.Duration{100 * time.Millisecond, 200 * time.Millisecond, 300 * time.Millisecond, 300 * time.Millisecond}
