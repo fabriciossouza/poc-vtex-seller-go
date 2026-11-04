@@ -155,7 +155,7 @@ func (w *world) do(method, path string, body any) (int, map[string]any) {
 	if err != nil {
 		w.t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, _ := io.ReadAll(resp.Body)
 	var out map[string]any
 	_ = json.Unmarshal(raw, &out)
@@ -428,7 +428,7 @@ func TestSimulatorInvoiceEndpointRejectsUnknownOrdersAndBadBodies(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("bad body: status = %d, want 400", resp.StatusCode)
 	}
@@ -456,7 +456,7 @@ func TestHealthMetricsAndSecurityHeaders(t *testing.T) {
 	if err != nil || health.StatusCode != http.StatusOK {
 		t.Fatalf("healthz = %v, %v", health, err)
 	}
-	health.Body.Close()
+	_ = health.Body.Close()
 	if health.Header.Get("X-Content-Type-Options") != "nosniff" || !strings.Contains(health.Header.Get("Content-Security-Policy"), "default-src 'self'") {
 		t.Fatalf("security headers = %v", health.Header)
 	}
@@ -465,7 +465,7 @@ func TestHealthMetricsAndSecurityHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, _ := io.ReadAll(resp.Body)
 	for _, want := range []string{"http_requests_total", "breaker_open", "dlq_depth"} {
 		if !strings.Contains(string(raw), want) {
@@ -495,7 +495,7 @@ func TestAppServesThePanelTheDocsAndTheSpec(t *testing.T) {
 			t.Fatal(err)
 		}
 		raw, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if resp.StatusCode != http.StatusOK || !strings.Contains(string(raw), want) {
 			t.Errorf("%s: status %d, missing %q", path, resp.StatusCode, want)
 		}

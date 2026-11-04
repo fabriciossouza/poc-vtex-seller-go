@@ -85,7 +85,7 @@ func (c *Client) post(ctx context.Context, path, idempotencyKey string, payload,
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode/100 != 2 {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		return &ports.StatusError{Service: "tms", StatusCode: resp.StatusCode}

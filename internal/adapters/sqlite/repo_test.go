@@ -139,7 +139,7 @@ func TestOrdersSurviveReopeningTheDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer second.Close()
+	defer func() { _ = second.Close() }()
 	if _, err := second.Get(context.Background(), "ord-1"); err != nil {
 		t.Fatalf("Get after reopen: %v", err)
 	}

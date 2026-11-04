@@ -116,7 +116,8 @@ func (r *Repo) FindByIdempotencyKey(ctx context.Context, key string) (*domain.Or
 }
 
 func (r *Repo) queryOne(ctx context.Context, column, value string) (*domain.Order, error) {
-	row := r.db.QueryRowContext(ctx, "SELECT "+columns+" FROM orders WHERE "+column+" = ?", value)
+	// column is always a constant chosen by Get or FindByIdempotencyKey; value is bound.
+	row := r.db.QueryRowContext(ctx, "SELECT "+columns+" FROM orders WHERE "+column+" = ?", value) // #nosec G202
 	var (
 		o                      domain.Order
 		items, status, created string

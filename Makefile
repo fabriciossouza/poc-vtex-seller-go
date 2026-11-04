@@ -4,7 +4,7 @@ UID := $(shell id -u)
 GID := $(shell id -g)
 GO_RUN = docker run --rm -u $(UID):$(GID) -e GOCACHE=/tmp/gc -e GOMODCACHE=/tmp/gm -e HOME=/tmp \
 	-v poc-vtex-gomod:/tmp/gm -v $(CURDIR)/.cache/go-build:/tmp/gc -v $(CURDIR):/src -w /src
-GO_IMAGE = golang:1.24
+GO_IMAGE = golang:1.26
 PHP_IMAGE = php:8.3-cli-alpine
 
 .PHONY: test test-go test-php test-integration up down demo

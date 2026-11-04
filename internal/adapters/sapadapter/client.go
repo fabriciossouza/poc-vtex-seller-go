@@ -61,7 +61,7 @@ func (c *Client) SendOrder(ctx context.Context, order domain.Order) error {
 	if err != nil {
 		return fmt.Errorf("send order to ERP: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 
 	if resp.StatusCode/100 == 2 || resp.StatusCode == http.StatusConflict {

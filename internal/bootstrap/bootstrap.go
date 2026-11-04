@@ -232,7 +232,7 @@ func sendJSON(ctx context.Context, client *http.Client, method, url string, body
 	if err != nil {
 		return fmt.Errorf("%s %s: %w", method, url, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode/100 != 2 {
 		return fmt.Errorf("%s %s: status %d", method, url, resp.StatusCode)

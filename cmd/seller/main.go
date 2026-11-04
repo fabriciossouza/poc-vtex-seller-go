@@ -39,7 +39,7 @@ func run() error {
 	defer stop()
 
 	rdb := redis.NewClient(&redis.Options{Addr: cfg.redisAddr})
-	defer rdb.Close()
+	defer func() { _ = rdb.Close() }()
 	cfg.app.Redis = rdb
 	app, err := bootstrap.New(ctx, cfg.app)
 	if err != nil {
@@ -122,7 +122,8 @@ func healthcheck() int {
 		return 1
 	}
 	client := http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get("http://127.0.0.1:" + port + "/healthz")
+	// The target is always loopback; only the port comes from LISTEN_ADDR.
+	resp, err := client.Get("http://127.0.0.1:" + port + "/healthz") // #nosec G704
 	if err != nil || resp.StatusCode != http.StatusOK {
 		return 1
 	}
