@@ -198,4 +198,6 @@ func TestPlaceOrderStillAnswersWithTheExistingOrderWhenReleasingTheDuplicateFail
 
 type failingReleaseReserver struct{ fakeReserver }
 
-func (f *failingReleaseReserver) Release(context.Context, string, int) error { return errors.New("stock down") }
+func (f *failingReleaseReserver) Release(context.Context, string, int) error {
+	return errors.New("stock down")
+}

@@ -17,6 +17,9 @@ import (
 // uniqueConstraint is SQLITE_CONSTRAINT_UNIQUE.
 const uniqueConstraint = 2067
 
+// primaryKeyConstraint is SQLITE_CONSTRAINT_PRIMARYKEY.
+const primaryKeyConstraint = 1555
+
 const schema = `
 CREATE TABLE IF NOT EXISTS orders (
 	id TEXT PRIMARY KEY,
@@ -60,10 +63,19 @@ func (r *Repo) Reset(ctx context.Context) error {
 	return nil
 }
 
-// Save inserts a new order or updates an existing one if its version still
-// matches the stored one (optimistic locking), returning
-// ports.ErrVersionConflict otherwise.
+// ErrIDCollision means a new order carries the id of a stored order that has
+// another idempotency key; the caller should retry with a fresh id.
+var ErrIDCollision = errors.New("order id already belongs to another order")
+
+// Save inserts a brand-new order (version 0, status received) and updates any
+// other one if its version still matches the stored one (optimistic locking).
+// An update that matches no row returns ports.ErrVersionConflict when the
+// order exists and domain.ErrOrderNotFound when it does not, so a reset can
+// never be undone by a late update.
 func (r *Repo) Save(ctx context.Context, order *domain.Order) error {
+	if order.Version == 0 && order.Status == domain.StatusReceived {
+		return r.insert(ctx, order)
+	}
 	res, err := r.db.ExecContext(ctx,
 		`UPDATE orders SET status = ?, tracking_code = ?, version = version + 1 WHERE id = ? AND version = ?`,
 		string(order.Status), order.TrackingCode, order.ID, order.Version)
@@ -78,10 +90,11 @@ func (r *Repo) Save(ctx context.Context, order *domain.Order) error {
 	switch err := r.db.QueryRowContext(ctx, `SELECT 1 FROM orders WHERE id = ?`, order.ID).Scan(&exists); {
 	case err == nil:
 		return ports.ErrVersionConflict
-	case !errors.Is(err, sql.ErrNoRows):
+	case errors.Is(err, sql.ErrNoRows):
+		return fmt.Errorf("update order %s: %w", order.ID, domain.ErrOrderNotFound)
+	default:
 		return fmt.Errorf("check order %s: %w", order.ID, err)
 	}
-	return r.insert(ctx, order)
 }
 
 func (r *Repo) insert(ctx context.Context, order *domain.Order) error {
@@ -96,12 +109,18 @@ func (r *Repo) insert(ctx context.Context, order *domain.Order) error {
 		return nil
 	}
 	var sqliteErr *sqlite.Error
-	if !errors.As(err, &sqliteErr) || sqliteErr.Code() != uniqueConstraint {
+	if !errors.As(err, &sqliteErr) || (sqliteErr.Code() != uniqueConstraint && sqliteErr.Code() != primaryKeyConstraint) {
 		return fmt.Errorf("save order %s: %w", order.ID, err)
 	}
 	existing, findErr := r.FindByIdempotencyKey(ctx, order.IdempotencyKey)
+	if errors.Is(findErr, domain.ErrOrderNotFound) {
+		return fmt.Errorf("save order %s: %w", order.ID, ErrIDCollision)
+	}
 	if findErr != nil {
 		return fmt.Errorf("load order after idempotency conflict: %w", findErr)
+	}
+	if existing.ID != order.ID && sqliteErr.Code() == primaryKeyConstraint {
+		return fmt.Errorf("save order %s: %w", order.ID, ErrIDCollision)
 	}
 	*order = *existing
 	return nil

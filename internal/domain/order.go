@@ -3,6 +3,7 @@ package domain
 import (
 	"errors"
 	"fmt"
+	"math"
 	"time"
 )
 
@@ -61,10 +62,22 @@ func NewOrder(id, idempotencyKey string, items []Item, now time.Time) (*Order, e
 	if len(items) == 0 {
 		return nil, fmt.Errorf("%w: no items", ErrInvalidOrder)
 	}
+	var total int64
 	for _, it := range items {
 		if it.SKU == "" || it.Quantity <= 0 {
 			return nil, fmt.Errorf("%w: item %q quantity %d", ErrInvalidOrder, it.SKU, it.Quantity)
 		}
+		if it.PriceCents < 0 {
+			return nil, fmt.Errorf("%w: item %q has a negative price", ErrInvalidOrder, it.SKU)
+		}
+		if it.PriceCents != 0 && int64(it.Quantity) > math.MaxInt64/it.PriceCents {
+			return nil, fmt.Errorf("%w: item %q total overflows", ErrInvalidOrder, it.SKU)
+		}
+		line := it.PriceCents * int64(it.Quantity)
+		if total > math.MaxInt64-line {
+			return nil, fmt.Errorf("%w: order total overflows", ErrInvalidOrder)
+		}
+		total += line
 	}
 	return &Order{
 		ID:             id,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/fabriciossouza/poc-vtex-seller-go/internal/domain"
 	"github.com/fabriciossouza/poc-vtex-seller-go/internal/ports"
@@ -41,16 +42,18 @@ func (uc *PlaceOrder) Execute(ctx context.Context, cmd PlaceOrderCommand) (*doma
 		return nil, err
 	}
 	order.MarketplaceEndpoint = cmd.MarketplaceEndpoint
-	if err := uc.reserve(ctx, order.Items); err != nil {
+	built, items := order.ID, append([]domain.Item(nil), order.Items...)
+	if err := uc.reserve(ctx, items); err != nil {
 		return nil, err
 	}
 	if err := uc.repo.Save(ctx, order); err != nil {
-		return nil, errors.Join(fmt.Errorf("save order: %w", err), uc.release(ctx, order.Items))
+		return nil, errors.Join(fmt.Errorf("save order: %w", err), releaseStock(ctx, uc.stock, items))
 	}
-	if order.ID != cmd.OrderID {
-		// A concurrent placement of the same key won the insert and holds the reservation.
-		if err := uc.release(ctx, cmd.Items); err != nil {
-			return nil, err
+	if order.ID != built {
+		// A concurrent placement of the same key won the insert and holds the
+		// reservation. The order exists, so a failed release is only logged.
+		if err := releaseStock(ctx, uc.stock, items); err != nil {
+			slog.Error("place: releasing the duplicate reservation failed", "order", order.ID, "error", err)
 		}
 	}
 	return order, nil
@@ -59,18 +62,8 @@ func (uc *PlaceOrder) Execute(ctx context.Context, cmd PlaceOrderCommand) (*doma
 func (uc *PlaceOrder) reserve(ctx context.Context, items []domain.Item) error {
 	for i, it := range items {
 		if err := uc.stock.Reserve(ctx, it.SKU, it.Quantity); err != nil {
-			return errors.Join(fmt.Errorf("reserve %s: %w", it.SKU, err), uc.release(ctx, items[:i]))
+			return errors.Join(fmt.Errorf("reserve %s: %w", it.SKU, err), releaseStock(ctx, uc.stock, items[:i]))
 		}
 	}
 	return nil
-}
-
-func (uc *PlaceOrder) release(ctx context.Context, items []domain.Item) error {
-	var errs []error
-	for _, it := range items {
-		if err := uc.stock.Release(ctx, it.SKU, it.Quantity); err != nil {
-			errs = append(errs, fmt.Errorf("release %s: %w", it.SKU, err))
-		}
-	}
-	return errors.Join(errs...)
 }

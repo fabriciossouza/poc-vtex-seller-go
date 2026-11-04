@@ -99,7 +99,7 @@ func TestFulfillOrderOfAnOrderAlreadyBeyondAuthorizedSucceedsWithoutEvent(t *tes
 func TestFulfillOrderRefusesACancelledOrder(t *testing.T) {
 	repo, bus := newMemRepo(), &fakeBus{}
 	seedOrder(t, repo)
-	_ = app.NewCancelOrder(repo).Execute(context.Background(), "ord-1")
+	_ = app.NewCancelOrder(repo, &fakeReserver{}).Execute(context.Background(), "ord-1")
 
 	err := app.NewFulfillOrder(repo, bus).Execute(context.Background(), "ord-1")
 

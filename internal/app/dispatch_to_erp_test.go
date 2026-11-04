@@ -167,7 +167,7 @@ func TestDispatchToERPUnknownOrderCallsNoPort(t *testing.T) {
 
 func TestDispatchToERPStopsWhenACancelIsConfirmedDuringTheERPCall(t *testing.T) {
 	env := newDispatchEnv(t)
-	cancel := app.NewCancelOrder(env.repo)
+	cancel := app.NewCancelOrder(env.repo, &fakeReserver{})
 	env.erp.onSend = func() {
 		if err := cancel.Execute(context.Background(), "ord-1"); err != nil {
 			t.Errorf("concurrent cancel: %v", err)
@@ -211,7 +211,7 @@ func TestDispatchToERPReportsAConflictCausedByAnotherWriterSoTheCallerCanRetry(t
 
 func TestDispatchToERPDoesNothingForACancelledOrder(t *testing.T) {
 	env := newDispatchEnv(t)
-	_ = app.NewCancelOrder(env.repo).Execute(context.Background(), "ord-1")
+	_ = app.NewCancelOrder(env.repo, &fakeReserver{}).Execute(context.Background(), "ord-1")
 
 	if err := env.uc.Execute(context.Background(), "ord-1"); err != nil {
 		t.Fatalf("Execute: %v", err)

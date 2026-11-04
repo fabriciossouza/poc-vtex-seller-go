@@ -523,7 +523,7 @@ func TestReplayDiscardsLettersThatCanNeverSucceedAndKeepsTheRest(t *testing.T) {
 
 func TestReplayTreatsALetterOfACancelledOrderAsDone(t *testing.T) {
 	e := newEnv(t)
-	_ = app.NewCancelOrder(e.repo).Execute(context.Background(), "ord-1")
+	_ = app.NewCancelOrder(e.repo, noStock{}).Execute(context.Background(), "ord-1")
 	e.consumer.dlq = []ports.DeadLetter{{ID: "dl-1", Event: e.authorized("ord-1")}}
 
 	res, err := e.worker.ReplayDLQ(context.Background())
@@ -655,3 +655,8 @@ func TestRunReturnsNilWhenShutdownInterruptsTheBackoff(t *testing.T) {
 		t.Fatalf("Run = %v, want nil on a normal shutdown", err)
 	}
 }
+
+type noStock struct{}
+
+func (noStock) Reserve(context.Context, string, int) error { return nil }
+func (noStock) Release(context.Context, string, int) error { return nil }

@@ -20,11 +20,17 @@ type Simulation struct {
 }
 
 func QuoteItem(item Item, unitPriceCents int64, stockOnHand int) QuotedItem {
+	return QuoteItemForDemand(item, unitPriceCents, stockOnHand, item.Quantity)
+}
+
+// QuoteItemForDemand compares the stock with the total quantity the cart asks
+// for of this SKU, which exceeds the item's own when the SKU repeats.
+func QuoteItemForDemand(item Item, unitPriceCents int64, stockOnHand, demand int) QuotedItem {
 	return QuotedItem{
 		Item:           item,
 		UnitPriceCents: unitPriceCents,
 		StockOnHand:    stockOnHand,
-		Available:      stockOnHand >= item.Quantity,
+		Available:      stockOnHand >= demand,
 	}
 }
 

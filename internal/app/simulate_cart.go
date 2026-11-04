@@ -19,6 +19,10 @@ func NewSimulateCart(catalog ports.Catalog, stock ports.Stock, tms ports.TMSPort
 }
 
 func (uc *SimulateCart) Execute(ctx context.Context, items []domain.Item) (domain.Simulation, error) {
+	demand := map[string]int{}
+	for _, it := range items {
+		demand[it.SKU] += it.Quantity
+	}
 	quoted := make([]domain.QuotedItem, 0, len(items))
 	for _, it := range items {
 		price, err := uc.catalog.UnitPriceCents(ctx, it.SKU)
@@ -29,7 +33,7 @@ func (uc *SimulateCart) Execute(ctx context.Context, items []domain.Item) (domai
 		if err != nil {
 			return domain.Simulation{}, fmt.Errorf("stock of %s: %w", it.SKU, err)
 		}
-		quoted = append(quoted, domain.QuoteItem(it, price, level))
+		quoted = append(quoted, domain.QuoteItemForDemand(it, price, level, demand[it.SKU]))
 	}
 	sla, err := uc.tms.QuoteShipping(ctx, items)
 	if err != nil {

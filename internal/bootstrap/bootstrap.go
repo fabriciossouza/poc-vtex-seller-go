@@ -101,7 +101,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		Simulate:         app.NewSimulateCart(catalog, stock, shipping),
 		Place:            app.NewPlaceOrder(repo, systemClock{}, stock),
 		Fulfill:          app.NewFulfillOrder(repo, bus),
-		Cancel:           app.NewCancelOrder(repo),
+		Cancel:           app.NewCancelOrder(repo, stock),
 		ValidateEndpoint: marketplaceClient.ValidateEndpoint,
 		Clock:            systemClock{},
 		NewID:            newID,

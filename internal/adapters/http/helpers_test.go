@@ -109,7 +109,7 @@ func newEnv(t *testing.T, stock map[string]int) *env {
 		Simulate: app.NewSimulateCart(fakeCatalog{}, fakeStock{stock}, fakeTMS{}),
 		Place:    app.NewPlaceOrder(repo, fixedClock{}, soldOutReserver{}),
 		Fulfill:  app.NewFulfillOrder(repo, bus),
-		Cancel:   app.NewCancelOrder(repo),
+		Cancel:   app.NewCancelOrder(repo, soldOutReserver{}),
 		Clock:    fixedClock{},
 		ValidateEndpoint: func(endpoint string) error {
 			if endpoint == "https://marketplace-exemplo.myvtex.com/" {
