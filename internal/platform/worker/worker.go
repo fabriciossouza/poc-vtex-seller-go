@@ -6,7 +6,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/fabriciossouza/poc-vtex-seller-go/internal/domain"
 	"github.com/fabriciossouza/poc-vtex-seller-go/internal/platform/resilience"
@@ -31,19 +33,50 @@ type Worker struct {
 	retrier  *resilience.Retrier
 	breaker  *resilience.Breaker
 
+	sleeper      resilience.Sleeper
+	backoffBase  time.Duration
+	backoffLimit time.Duration
+
 	replayMu sync.Mutex
 }
 
-func New(source ports.EventConsumer, dispatch Dispatcher, retrier *resilience.Retrier, breaker *resilience.Breaker) *Worker {
-	return &Worker{source: source, dispatch: dispatch, retrier: retrier, breaker: breaker}
+type Option func(*Worker)
+
+// WithBackoff sets how Run pauses after a queue error: base, doubling up to limit.
+func WithBackoff(s resilience.Sleeper, base, limit time.Duration) Option {
+	return func(w *Worker) { w.sleeper, w.backoffBase, w.backoffLimit = s, base, limit }
 }
 
-// Run processes deliveries until ctx is cancelled or the queue itself fails.
+func New(source ports.EventConsumer, dispatch Dispatcher, retrier *resilience.Retrier, breaker *resilience.Breaker, opts ...Option) *Worker {
+	w := &Worker{
+		source: source, dispatch: dispatch, retrier: retrier, breaker: breaker,
+		sleeper: resilience.SystemSleeper{}, backoffBase: 100 * time.Millisecond, backoffLimit: 5 * time.Second,
+	}
+	for _, opt := range opts {
+		opt(w)
+	}
+	return w
+}
+
+// Run processes deliveries until ctx is cancelled, which is a normal shutdown
+// and returns nil. A queue error (Receive, Ack or Reject) is logged and
+// retried after a growing pause: the message stays pending and is redelivered.
 func (w *Worker) Run(ctx context.Context) error {
+	pause := w.backoffBase
 	for ctx.Err() == nil {
-		if err := w.ProcessNext(ctx); err != nil {
-			return err
+		err := w.ProcessNext(ctx)
+		if err == nil {
+			pause = w.backoffBase
+			continue
 		}
+		if ctx.Err() != nil {
+			break
+		}
+		slog.Error("worker: queue error, backing off", "error", err, "pause", pause)
+		if w.sleeper.Sleep(ctx, pause) != nil {
+			break
+		}
+		pause = min(pause*2, w.backoffLimit)
 	}
 	return nil
 }
