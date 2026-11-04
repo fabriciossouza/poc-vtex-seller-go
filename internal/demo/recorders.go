@@ -24,7 +24,7 @@ func NewRecordingERP(next ports.ERPPort, tl *Timeline) *RecordingERP {
 func (r *RecordingERP) SendOrder(ctx context.Context, order domain.Order) error {
 	err := r.next.SendOrder(ctx, order)
 	if err != nil {
-		r.tl.Add(order.IdempotencyKey, "erp", Error, "ERP recusou ou nao respondeu: "+err.Error())
+		r.tl.Add(order.IdempotencyKey, "erp", Error, "ERP recusou ou não respondeu: "+err.Error())
 		return err
 	}
 	r.tl.Add(order.IdempotencyKey, "erp", OK, "ERP registrou o pedido")
@@ -65,12 +65,13 @@ func NewRecordingMarketplace(next ports.MarketplacePort, tl *Timeline) *Recordin
 }
 
 func (r *RecordingMarketplace) NotifyInvoice(ctx context.Context, order domain.Order) error {
-	err := r.next.NotifyInvoice(ctx, order)
-	if err != nil {
-		r.tl.Add(order.IdempotencyKey, "marketplace", Error, "seller nao conseguiu enviar a nota: "+err.Error())
+	// Recorded before the call: the simulated marketplace logs its receipt
+	// while handling it.
+	r.tl.Add(order.IdempotencyKey, "marketplace", Info, "seller envia a nota com o rastreio")
+	if err := r.next.NotifyInvoice(ctx, order); err != nil {
+		r.tl.Add(order.IdempotencyKey, "marketplace", Error, "seller não conseguiu enviar a nota: "+err.Error())
 		return err
 	}
-	r.tl.Add(order.IdempotencyKey, "marketplace", OK, "seller enviou a nota com o rastreio")
 	return nil
 }
 
@@ -84,10 +85,13 @@ func NewRecordingBus(next ports.EventBus, tl *Timeline) *RecordingBus {
 }
 
 func (r *RecordingBus) Publish(ctx context.Context, event domain.Event) error {
+	// Recorded before the call: a consumer may read the event before Publish
+	// returns.
+	r.tl.Add(event.OrderID, "fila", Info, fmt.Sprintf("seller publica o evento %s na fila", event.Type))
 	if err := r.next.Publish(ctx, event); err != nil {
+		r.tl.Add(event.OrderID, "fila", Error, fmt.Sprintf("falha ao publicar o evento %s: %s", event.Type, err.Error()))
 		return err
 	}
-	r.tl.Add(event.OrderID, "fila", Info, fmt.Sprintf("evento %s publicado", event.Type))
 	return nil
 }
 
@@ -125,7 +129,7 @@ func (r *RecordingConsumer) Ack(ctx context.Context, deliveryID string) error {
 	orderID := r.orders[deliveryID]
 	delete(r.orders, deliveryID)
 	r.mu.Unlock()
-	r.tl.Add(orderID, "fila", OK, "despacho concluido, evento confirmado")
+	r.tl.Add(orderID, "fila", OK, "despacho concluído, evento confirmado")
 	return nil
 }
 
@@ -136,7 +140,7 @@ func (r *RecordingConsumer) Reject(ctx context.Context, d ports.Delivery, reason
 	r.mu.Lock()
 	delete(r.orders, d.ID)
 	r.mu.Unlock()
-	r.tl.Add(d.Event.OrderID, "dlq", Error, fmt.Sprintf("enviado para a DLQ apos %d tentativas: %s", attempts, reason))
+	r.tl.Add(d.Event.OrderID, "dlq", Error, fmt.Sprintf("enviado para a DLQ após %d tentativas: %s", attempts, reason))
 	return nil
 }
 

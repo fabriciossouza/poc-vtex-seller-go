@@ -35,10 +35,10 @@ func NewCatalog(products ...Product) *Catalog {
 // and its price match the payloads in testdata.
 func DefaultCatalog() *Catalog {
 	return NewCatalog(
-		Product{SKU: "6", Name: "Camiseta basica", PriceCents: 2499},
-		Product{SKU: "7", Name: "Caneca de ceramica", PriceCents: 3290},
+		Product{SKU: "6", Name: "Camiseta básica", PriceCents: 2499},
+		Product{SKU: "7", Name: "Caneca de cerâmica", PriceCents: 3290},
 		Product{SKU: "8", Name: "Mochila urbana", PriceCents: 18990},
-		Product{SKU: "9", Name: "Tenis edicao limitada", PriceCents: 45990},
+		Product{SKU: "9", Name: "Tênis edição limitada", PriceCents: 45990},
 	)
 }
 

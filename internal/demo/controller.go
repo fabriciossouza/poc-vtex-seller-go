@@ -190,9 +190,9 @@ func (c *Controller) simulate(ctx context.Context, mid string, req orderRequest)
 		return 0, fmt.Errorf("simulation answered status %d", status)
 	}
 	if len(sim.LogisticsInfo[0].SLAs) == 0 {
-		c.Timeline.Add(mid, "marketplace", Info, "simulacao: sem estoque suficiente para este SKU")
+		c.Timeline.Add(mid, "marketplace", Info, "simulação: sem estoque suficiente para este SKU")
 	} else {
-		c.Timeline.Add(mid, "marketplace", Info, fmt.Sprintf("simulacao: preco %s, frete %s",
+		c.Timeline.Add(mid, "marketplace", Info, fmt.Sprintf("simulação: preço %s, frete %s",
 			money(sim.Items[0].Price), money(sim.LogisticsInfo[0].SLAs[0].Price)))
 	}
 	return sim.Items[0].Price, nil
@@ -209,13 +209,16 @@ func (c *Controller) fulfill(w http.ResponseWriter, r *http.Request) {
 		}
 		sellerID = order.ID
 	}
+	// Recorded before the call: the seller publishes the event inside it, and
+	// the timeline must read in causal order.
+	c.Timeline.Add(mid, "marketplace", Info, "pagamento aprovado: marketplace autorizou o despacho (fulfill)")
 	status, _, err := c.callSeller(ctx, http.MethodPost, "/pvt/orders/"+sellerID+"/fulfill", map[string]any{"marketplaceOrderId": mid})
 	if err != nil || status != http.StatusOK {
+		c.Timeline.Add(mid, "marketplace", Error, "seller recusou o despacho")
 		slog.Error("demo: fulfill failed", "status", status, "error", err)
 		writeError(w, http.StatusBadGateway, "fulfill_failed", "the seller refused the fulfillment")
 		return
 	}
-	c.Timeline.Add(mid, "marketplace", Info, "pagamento aprovado: marketplace autorizou o despacho (fulfill)")
 	writeJSON(w, http.StatusOK, map[string]any{"marketplaceOrderId": mid, "sellerOrderId": sellerID})
 }
 

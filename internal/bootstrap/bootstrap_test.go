@@ -247,6 +247,45 @@ func TestHappyPathRunsFromPlacementToTrackingAndTheMarketplaceReceivesTheInvoice
 	}
 }
 
+func TestHappyPathTimelineReadsInCausalOrderWithAccents(t *testing.T) {
+	w := start(t)
+	w.place("CAUSAL-1")
+	w.fulfill("CAUSAL-1")
+	w.eventually("invoice received and delivery settled", func() bool {
+		o := w.orderState("CAUSAL-1")
+		return o != nil && strings.Contains(sources(o), "despacho concluído")
+	})
+
+	var messages []string
+	for _, e := range w.orderState("CAUSAL-1")["events"].([]any) {
+		messages = append(messages, e.(map[string]any)["message"].(string))
+	}
+	steps := []string{
+		"simulação", "pedido enviado", "autorizou o despacho", "publica o evento order.authorized",
+		"worker recebeu o evento", "ERP registrou", "TMS criou a remessa", "seller envia a nota",
+		"marketplace recebeu a nota", "despacho concluído",
+	}
+	prev := -1
+	for _, step := range steps {
+		at := -1
+		for i, m := range messages {
+			if strings.Contains(m, step) {
+				at = i
+				break
+			}
+		}
+		if at <= prev {
+			t.Fatalf("%q is missing or out of order:\n%s", step, strings.Join(messages, "\n"))
+		}
+		prev = at
+	}
+	for _, ascii := range []string{"simulacao", " nao ", "concluido", " apos ", "preco"} {
+		if strings.Contains(strings.Join(messages, "\n"), ascii) {
+			t.Errorf("message without accent: %q", ascii)
+		}
+	}
+}
+
 func TestDuplicatePlacementYieldsASingleOrderAndASingleStockReservation(t *testing.T) {
 	w := start(t)
 	before := stockOf(w.state(), "6")
