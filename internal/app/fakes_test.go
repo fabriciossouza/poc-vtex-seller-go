@@ -132,6 +132,8 @@ func (c fixedClock) Now() time.Time { return c.t }
 type fakeReserver struct {
 	calls   []string
 	failSKU string
+	// releaseCtxErr is ctx.Err() as seen by each Release call.
+	releaseCtxErr []error
 }
 
 func (f *fakeReserver) Reserve(_ context.Context, sku string, qty int) error {
@@ -142,7 +144,8 @@ func (f *fakeReserver) Reserve(_ context.Context, sku string, qty int) error {
 	return nil
 }
 
-func (f *fakeReserver) Release(_ context.Context, sku string, qty int) error {
+func (f *fakeReserver) Release(ctx context.Context, sku string, qty int) error {
+	f.releaseCtxErr = append(f.releaseCtxErr, ctx.Err())
 	f.calls = append(f.calls, fmt.Sprintf("release %s %d", sku, qty))
 	return nil
 }

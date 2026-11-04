@@ -160,3 +160,42 @@ func TestPlaceOrderReleasesTheReservationWhenAConcurrentPlacementWon(t *testing.
 		t.Fatalf("calls = %v, want %v", stock.calls, want)
 	}
 }
+
+// cancellingRepo cancels the caller's context while saving, as a client that
+// hung up mid-request would, and then fails.
+type cancellingRepo struct {
+	*memRepo
+	cancel context.CancelFunc
+}
+
+func (r cancellingRepo) Save(context.Context, *domain.Order) error {
+	r.cancel()
+	return errors.New("connection lost")
+}
+
+func TestPlaceOrderReleasesWithAContextThatSurvivesTheCallerHangingUp(t *testing.T) {
+	stock := &fakeReserver{}
+	ctx, cancel := context.WithCancel(context.Background())
+	uc := app.NewPlaceOrder(cancellingRepo{newMemRepo(), cancel}, fixedClock{testNow}, stock)
+
+	_, _ = uc.Execute(ctx, placeCmd(domain.Item{SKU: "a", Quantity: 2}))
+
+	if len(stock.releaseCtxErr) != 1 || stock.releaseCtxErr[0] != nil {
+		t.Fatalf("release saw ctx errors %v, want one call with a live context", stock.releaseCtxErr)
+	}
+}
+
+func TestPlaceOrderStillAnswersWithTheExistingOrderWhenReleasingTheDuplicateFails(t *testing.T) {
+	stock := &failingReleaseReserver{}
+	uc := app.NewPlaceOrder(racedRepo{newMemRepo()}, fixedClock{testNow}, stock)
+
+	order, err := uc.Execute(context.Background(), placeCmd(domain.Item{SKU: "a", Quantity: 2}))
+
+	if err != nil || order == nil || order.ID != "winner" {
+		t.Fatalf("order = %+v, err = %v: the order exists, so the placement succeeded", order, err)
+	}
+}
+
+type failingReleaseReserver struct{ fakeReserver }
+
+func (f *failingReleaseReserver) Release(context.Context, string, int) error { return errors.New("stock down") }

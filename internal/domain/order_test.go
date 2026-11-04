@@ -2,6 +2,7 @@ package domain_test
 
 import (
 	"errors"
+	"math"
 	"testing"
 	"time"
 
@@ -111,5 +112,24 @@ func TestShippedOrderCannotBeCancelled(t *testing.T) {
 	_ = o.MarkShipped("T")
 	if err := o.Cancel(); !errors.Is(err, domain.ErrInvalidTransition) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestNewOrderRejectsNegativePricesAndOverflowingTotals(t *testing.T) {
+	cases := map[string][]domain.Item{
+		"negative price":    {{SKU: "a", Quantity: 1, PriceCents: -1}},
+		"line overflows":    {{SKU: "a", Quantity: math.MaxInt32, PriceCents: math.MaxInt64}},
+		"total overflows":   {{SKU: "a", Quantity: 1, PriceCents: math.MaxInt64}, {SKU: "b", Quantity: 1, PriceCents: 1}},
+		"negative quantity": {{SKU: "a", Quantity: -3, PriceCents: 10}},
+	}
+	for name, items := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := domain.NewOrder("o", "k", items, now); !errors.Is(err, domain.ErrInvalidOrder) {
+				t.Fatalf("err = %v, want ErrInvalidOrder", err)
+			}
+		})
+	}
+	if _, err := domain.NewOrder("o", "k", []domain.Item{{SKU: "a", Quantity: 2, PriceCents: 0}}, now); err != nil {
+		t.Fatalf("a free item is valid: %v", err)
 	}
 }

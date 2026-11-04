@@ -74,3 +74,20 @@ func TestSimulateCartPropagatesPortErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestSimulateCartAddsUpQuantitiesOfTheSameSKUBeforeComparingWithStock(t *testing.T) {
+	uc := app.NewSimulateCart(
+		fakeCatalog{prices: map[string]int64{"a": 100}},
+		fakeStock{levels: map[string]int{"a": 5}},
+		&fakeTMS{},
+	)
+
+	sim, err := uc.Execute(context.Background(), []domain.Item{{SKU: "a", Quantity: 3}, {SKU: "a", Quantity: 3}})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sim.Items[0].Available || sim.Items[1].Available || sim.Purchasable() {
+		t.Fatalf("3 + 3 of a SKU with 5 in stock must be denied: %+v", sim.Items)
+	}
+}

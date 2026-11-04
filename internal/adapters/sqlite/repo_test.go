@@ -208,3 +208,60 @@ func TestResetRemovesEveryOrderAndFreesTheIdempotencyKeys(t *testing.T) {
 		t.Fatalf("Save with the old key = %v, id %s", err, again.ID)
 	}
 }
+
+func TestSaveOfAnUpdatedOrderDoesNotResurrectItAfterAReset(t *testing.T) {
+	ctx := context.Background()
+	repo := openRepo(t)
+	order := newOrder(t, "ord-1", "mkt-1")
+	if err := repo.Save(ctx, order); err != nil {
+		t.Fatal(err)
+	}
+	_ = order.Authorize()
+	if err := repo.Reset(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	err := repo.Save(ctx, order)
+
+	if !errors.Is(err, domain.ErrOrderNotFound) {
+		t.Fatalf("err = %v, want ErrOrderNotFound", err)
+	}
+	if _, err := repo.Get(ctx, "ord-1"); !errors.Is(err, domain.ErrOrderNotFound) {
+		t.Fatalf("the order came back after the reset: %v", err)
+	}
+}
+
+func TestSaveInsertsOnlyBrandNewReceivedOrders(t *testing.T) {
+	ctx := context.Background()
+	repo := openRepo(t)
+	advanced := newOrder(t, "ord-2", "mkt-2")
+	_ = advanced.Authorize()
+
+	if err := repo.Save(ctx, advanced); !errors.Is(err, domain.ErrOrderNotFound) {
+		t.Fatalf("an authorized order that was never stored: err = %v, want ErrOrderNotFound", err)
+	}
+	versioned := newOrder(t, "ord-3", "mkt-3")
+	versioned.Version = 4
+	if err := repo.Save(ctx, versioned); !errors.Is(err, domain.ErrOrderNotFound) {
+		t.Fatalf("a versioned order that was never stored: err = %v, want ErrOrderNotFound", err)
+	}
+}
+
+func TestSaveWithAnIDOfAnotherOrderFailsAndLeavesTheStoredOrderUntouched(t *testing.T) {
+	ctx := context.Background()
+	repo := openRepo(t)
+	first := newOrder(t, "ord-1", "mkt-1")
+	if err := repo.Save(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+
+	err := repo.Save(ctx, newOrder(t, "ord-1", "mkt-OTHER"))
+
+	if err == nil || errors.Is(err, ports.ErrVersionConflict) {
+		t.Fatalf("err = %v, want an id collision error", err)
+	}
+	got, _ := repo.Get(ctx, "ord-1")
+	if got.IdempotencyKey != "mkt-1" || got.Status != domain.StatusReceived || got.Version != 0 {
+		t.Fatalf("stored order was changed: %+v", got)
+	}
+}
