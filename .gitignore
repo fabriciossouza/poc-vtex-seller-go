@@ -4,3 +4,5 @@ docs/PLANO.md
 .tdd-log.md
 .cache/
 cover.out
+# Runbook operacional da VPS: fica local, cita infraestrutura de terceiros
+deploy/RUNBOOK.md
