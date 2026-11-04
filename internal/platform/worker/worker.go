@@ -18,7 +18,10 @@ type Dispatcher interface {
 
 type ReplayResult struct {
 	Replayed int
-	Failed   int
+	// Failed letters stay in the DLQ for another attempt.
+	Failed int
+	// Discarded letters can never succeed (malformed, unknown or terminal order).
+	Discarded int
 }
 
 type Worker struct {

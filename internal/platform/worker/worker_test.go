@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -120,10 +121,14 @@ func (c *fakeConsumer) Reject(_ context.Context, d ports.Delivery, reason string
 }
 
 func (c *fakeConsumer) DeadLetters(context.Context) ([]ports.DeadLetter, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return append([]ports.DeadLetter(nil), c.dlq...), nil
 }
 
 func (c *fakeConsumer) Discard(_ context.Context, id string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	for i, d := range c.dlq {
 		if d.ID == id {
 			c.dlq = append(c.dlq[:i], c.dlq[i+1:]...)
@@ -446,5 +451,74 @@ func TestShutdownDuringReplayStopsAndKeepsTheLetter(t *testing.T) {
 
 	if !errors.Is(err, context.Canceled) || len(e.consumer.dlq) != 1 {
 		t.Fatalf("err = %v, dlq = %v", err, e.consumer.dlq)
+	}
+}
+
+type slowFirstDispatch struct{ calls atomic.Int32 }
+
+func (d *slowFirstDispatch) Execute(context.Context, string) error {
+	if d.calls.Add(1) == 1 {
+		time.Sleep(100 * time.Millisecond) // lets a concurrent replay list the same letter
+	}
+	return nil
+}
+
+func TestConcurrentReplaysNeverDispatchTheSameLetterTwice(t *testing.T) {
+	e := newEnv(t)
+	e.consumer.dlq = []ports.DeadLetter{{ID: "dl-1", Event: e.authorized("ord-1"), Reason: "x", Attempts: 4}}
+	dispatch := &slowFirstDispatch{}
+	e.worker = worker.New(e.consumer, dispatch, resilience.NewRetrier(
+		resilience.RetryConfig{MaxAttempts: 1}, e.sleeper, nil), e.breaker)
+
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := e.worker.ReplayDLQ(context.Background()); err != nil {
+				t.Errorf("ReplayDLQ: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if n := dispatch.calls.Load(); n != 1 {
+		t.Fatalf("dispatches = %d, want 1", n)
+	}
+}
+
+func TestReplayDiscardsLettersThatCanNeverSucceedAndKeepsTheRest(t *testing.T) {
+	e := newEnv(t)
+	failed, _ := domain.NewOrder("ord-failed", "mkt-f", []domain.Item{{SKU: "6", Quantity: 1}}, t0)
+	_ = failed.Fail()
+	_ = e.repo.Save(context.Background(), failed)
+	e.erp.err = erpReject
+	e.consumer.dlq = []ports.DeadLetter{
+		{ID: "unsupported", Event: domain.Event{Type: "order.unknown", OrderID: "ord-1"}},
+		{ID: "no-order-id", Event: domain.Event{}},
+		{ID: "ghost", Event: e.authorized("ghost")},
+		{ID: "terminal", Event: e.authorized("ord-failed")},
+		{ID: "rejected-by-erp", Event: e.authorized("ord-1")},
+	}
+
+	res, err := e.worker.ReplayDLQ(context.Background())
+
+	if err != nil || res != (worker.ReplayResult{Discarded: 4, Failed: 1}) {
+		t.Fatalf("result = %+v, err = %v", res, err)
+	}
+	if len(e.consumer.dlq) != 1 || e.consumer.dlq[0].ID != "rejected-by-erp" {
+		t.Fatalf("remaining = %+v: only the ERP rejection deserves a human look", e.consumer.dlq)
+	}
+}
+
+func TestReplayTreatsALetterOfACancelledOrderAsDone(t *testing.T) {
+	e := newEnv(t)
+	_ = app.NewCancelOrder(e.repo).Execute(context.Background(), "ord-1")
+	e.consumer.dlq = []ports.DeadLetter{{ID: "dl-1", Event: e.authorized("ord-1")}}
+
+	res, err := e.worker.ReplayDLQ(context.Background())
+
+	if err != nil || res != (worker.ReplayResult{Replayed: 1}) || len(e.consumer.dlq) != 0 || e.erp.calls != 0 {
+		t.Fatalf("result = %+v, err = %v, dlq = %v, ERP calls = %d", res, err, e.consumer.dlq, e.erp.calls)
 	}
 }
