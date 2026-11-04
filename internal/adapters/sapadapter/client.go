@@ -19,7 +19,7 @@ type Client struct {
 	http    *http.Client
 }
 
-// New returns a client for the SAP-Adapter service; a nil httpClient gets a 5s timeout.
+// New returns a client for the ERP adapter service; a nil httpClient gets a 5s timeout.
 func New(baseURL string, httpClient *http.Client) *Client {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 5 * time.Second}
