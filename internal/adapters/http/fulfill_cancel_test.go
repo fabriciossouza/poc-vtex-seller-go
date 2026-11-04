@@ -1,7 +1,10 @@
 package httpadapter_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -122,18 +125,45 @@ func TestCancelRequiresTheContractFields(t *testing.T) {
 func TestCancelMapsDomainErrorsToStatus(t *testing.T) {
 	e := newEnv(t, nil)
 	orderID := placeContractOrder(t, e)
-	shipped, _ := e.repo.Get(context.Background(), orderID)
-	_ = shipped.Authorize()
-	_ = shipped.MarkSentToERP()
-	_ = shipped.MarkShipped("TRK")
-	_ = e.repo.Save(context.Background(), shipped)
+	failed, _ := e.repo.Get(context.Background(), orderID)
+	_ = failed.Fail()
+	_ = e.repo.Save(context.Background(), failed)
 	body := readJSONFile(t, "cancel_request.json")
 
 	if status, _ := e.post(t, "/pvt/orders/nope/cancel", body); status != http.StatusNotFound {
 		t.Errorf("unknown order: status = %d, want 404", status)
 	}
 	if status, _ := e.post(t, "/pvt/orders/"+orderID+"/cancel", body); status != http.StatusConflict {
-		t.Errorf("shipped order: status = %d, want 409 (the marketplace must refuse by sending the invoice)", status)
+		t.Errorf("failed order: status = %d, want 409", status)
+	}
+}
+
+func TestCancelOfAnOrderAtTheERPOrShippedIsEvaluatedWithAnEmptyResponse(t *testing.T) {
+	for _, shipped := range []bool{false, true} {
+		e := newEnv(t, nil)
+		orderID := placeContractOrder(t, e)
+		o, _ := e.repo.Get(context.Background(), orderID)
+		_ = o.Authorize()
+		_ = o.MarkSentToERP()
+		if shipped {
+			_ = o.MarkShipped("TRK")
+		}
+		_ = e.repo.Save(context.Background(), o)
+		raw, _ := json.Marshal(readJSONFile(t, "cancel_request.json"))
+
+		resp, err := http.Post(e.srv.URL+"/pvt/orders/"+orderID+"/cancel", "application/json", bytes.NewReader(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK || len(body) != 0 {
+			t.Errorf("shipped=%v: status = %d, body = %q, want 200 and an empty body (evaluating)", shipped, resp.StatusCode, body)
+		}
+		if stored, _ := e.repo.Get(context.Background(), orderID); stored.Status != o.Status {
+			t.Errorf("shipped=%v: status = %s, the order must not change", shipped, stored.Status)
+		}
 	}
 }
 

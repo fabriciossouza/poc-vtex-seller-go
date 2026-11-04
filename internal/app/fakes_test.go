@@ -26,6 +26,7 @@ type fakeTMS struct {
 	tracking    string
 	shipmentErr error
 	shipments   int
+	onShip      func()
 }
 
 func (f *fakeTMS) QuoteShipping(context.Context, []domain.Item) (domain.ShippingSLA, error) {
@@ -34,6 +35,9 @@ func (f *fakeTMS) QuoteShipping(context.Context, []domain.Item) (domain.Shipping
 
 func (f *fakeTMS) CreateShipment(context.Context, domain.Order) (string, error) {
 	f.shipments++
+	if f.onShip != nil {
+		f.onShip()
+	}
 	if f.shipmentErr != nil {
 		return "", f.shipmentErr
 	}

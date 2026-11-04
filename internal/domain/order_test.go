@@ -105,13 +105,17 @@ func TestFailAndCancelAreTerminal(t *testing.T) {
 	}
 }
 
-func TestShippedOrderCannotBeCancelled(t *testing.T) {
-	o := newOrder(t)
-	_ = o.Authorize()
-	_ = o.MarkSentToERP()
-	_ = o.MarkShipped("T")
-	if err := o.Cancel(); !errors.Is(err, domain.ErrInvalidTransition) {
-		t.Fatalf("err = %v", err)
+func TestOrderAlreadyAtTheERPOrShippedCannotBeCancelled(t *testing.T) {
+	for name, advance := range map[string]func(*domain.Order){
+		"sent to ERP": func(o *domain.Order) { _ = o.Authorize(); _ = o.MarkSentToERP() },
+		"shipped":     func(o *domain.Order) { _ = o.Authorize(); _ = o.MarkSentToERP(); _ = o.MarkShipped("T") },
+	} {
+		o := newOrder(t)
+		advance(o)
+		before := o.Status
+		if err := o.Cancel(); !errors.Is(err, domain.ErrInvalidTransition) || o.Status != before {
+			t.Errorf("%s: err = %v, status = %s", name, err, o.Status)
+		}
 	}
 }
 

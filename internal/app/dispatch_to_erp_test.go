@@ -187,6 +187,26 @@ func TestDispatchToERPStopsWhenACancelIsConfirmedDuringTheERPCall(t *testing.T) 
 	}
 }
 
+func TestACancelDuringTheTMSCallIsOnlyEvaluatedSoTheStockStaysWithTheShipment(t *testing.T) {
+	env := newDispatchEnv(t)
+	stock := &fakeReserver{}
+	var cancelErr error
+	env.tms.onShip = func() {
+		cancelErr = app.NewCancelOrder(env.repo, stock).Execute(context.Background(), "ord-1", "key-1")
+	}
+
+	if err := env.uc.Execute(context.Background(), "ord-1"); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	if !errors.Is(cancelErr, domain.ErrCancellationEvaluating) || len(stock.calls) != 0 {
+		t.Fatalf("cancel err = %v, stock calls = %v", cancelErr, stock.calls)
+	}
+	if env.status(t) != domain.StatusShipped || env.mkt.notified["ord-1"] != "TRK-1" {
+		t.Fatalf("status = %s, notified = %v: the invoice is the refusal of the cancel", env.status(t), env.mkt.notified)
+	}
+}
+
 func TestDispatchToERPReportsAConflictCausedByAnotherWriterSoTheCallerCanRetry(t *testing.T) {
 	env := newDispatchEnv(t)
 	env.erp.onSend = func() {

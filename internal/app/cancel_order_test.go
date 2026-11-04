@@ -25,23 +25,27 @@ func TestCancelOrderCancelsAReceivedOrder(t *testing.T) {
 	}
 }
 
-func TestCancelOrderRefusesShippedOrder(t *testing.T) {
-	repo := newMemRepo()
-	seedOrder(t, repo)
-	o, _ := repo.Get(context.Background(), "ord-1")
-	_ = o.Authorize()
-	_ = o.MarkSentToERP()
-	_ = o.MarkShipped("TRK-1")
-	_ = repo.Save(context.Background(), o)
+func TestCancelOrderOnlyEvaluatesWhenTheOrderIsAlreadyAtTheERPOrShipped(t *testing.T) {
+	for _, status := range []domain.OrderStatus{domain.StatusSentToERP, domain.StatusShipped} {
+		repo, stock := newMemRepo(), &fakeReserver{}
+		seedOrder(t, repo)
+		o, _ := repo.Get(context.Background(), "ord-1")
+		_ = o.Authorize()
+		_ = o.MarkSentToERP()
+		if status == domain.StatusShipped {
+			_ = o.MarkShipped("TRK-1")
+		}
+		_ = repo.Save(context.Background(), o)
 
-	err := app.NewCancelOrder(repo, &fakeReserver{}).Execute(context.Background(), "ord-1", "key-1")
+		err := app.NewCancelOrder(repo, stock).Execute(context.Background(), "ord-1", "key-1")
 
-	if !errors.Is(err, domain.ErrInvalidTransition) {
-		t.Fatalf("err = %v, want ErrInvalidTransition", err)
-	}
-	got, _ := repo.Get(context.Background(), "ord-1")
-	if got.Status != domain.StatusShipped {
-		t.Fatalf("status = %s", got.Status)
+		if !errors.Is(err, domain.ErrCancellationEvaluating) {
+			t.Fatalf("%s: err = %v, want ErrCancellationEvaluating", status, err)
+		}
+		got, _ := repo.Get(context.Background(), "ord-1")
+		if got.Status != status || len(stock.calls) != 0 {
+			t.Fatalf("%s: status = %s, stock calls = %v; goods may already be moving, so nothing changes", status, got.Status, stock.calls)
+		}
 	}
 }
 
@@ -53,15 +57,12 @@ func TestCancelOrderUnknownOrder(t *testing.T) {
 }
 
 func TestCancelOrderReleasesTheReservedStockOnlyWhenTheCancellationIsSaved(t *testing.T) {
-	for _, status := range []domain.OrderStatus{domain.StatusReceived, domain.StatusAuthorized, domain.StatusSentToERP} {
+	for _, status := range []domain.OrderStatus{domain.StatusReceived, domain.StatusAuthorized} {
 		repo, stock := newMemRepo(), &fakeReserver{}
 		seedOrder(t, repo)
 		o, _ := repo.Get(context.Background(), "ord-1")
 		if status != domain.StatusReceived {
 			_ = o.Authorize()
-		}
-		if status == domain.StatusSentToERP {
-			_ = o.MarkSentToERP()
 		}
 		_ = repo.Save(context.Background(), o)
 
@@ -76,18 +77,6 @@ func TestCancelOrderReleasesTheReservedStockOnlyWhenTheCancellationIsSaved(t *te
 		if len(stock.calls) != 1 {
 			t.Fatalf("%s: repeated cancel released again: %v", status, stock.calls)
 		}
-	}
-
-	repo, stock := newMemRepo(), &fakeReserver{}
-	seedOrder(t, repo)
-	o, _ := repo.Get(context.Background(), "ord-1")
-	_ = o.Authorize()
-	_ = o.MarkSentToERP()
-	_ = o.MarkShipped("TRK")
-	_ = repo.Save(context.Background(), o)
-	_ = app.NewCancelOrder(repo, stock).Execute(context.Background(), "ord-1", "key-1")
-	if len(stock.calls) != 0 {
-		t.Fatalf("a shipped order keeps its stock: %v", stock.calls)
 	}
 }
 
