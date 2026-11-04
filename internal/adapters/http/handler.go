@@ -38,6 +38,8 @@ func NewHandler(d Deps) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /pvt/orderForms/simulation", h.simulate)
 	mux.HandleFunc("POST /pvt/orders", h.placeOrder)
+	mux.HandleFunc("POST /pvt/orders/{sellerOrderId}/fulfill", h.fulfill)
+	mux.HandleFunc("POST /pvt/orders/{sellerOrderId}/cancel", h.cancel)
 	return mux
 }
 
